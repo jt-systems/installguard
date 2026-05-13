@@ -241,6 +241,9 @@ fn summarise(r: &Reason) -> String {
         Reason::ProvenanceMissing => {
             "policy requires cryptographic provenance but none was verified".to_string()
         }
+        Reason::TrustScoreBelowThreshold { score, threshold } => {
+            format!("trust score {score}/100 is below the {threshold} threshold")
+        }
         Reason::SignalUnavailable { provider, reason } => {
             format!("signal provider `{provider}` unavailable: {reason}")
         }

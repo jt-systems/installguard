@@ -18,6 +18,7 @@ pub mod policy;
 pub mod sbom;
 pub mod script_scan;
 pub mod signal;
+pub mod trust_score;
 pub mod vex;
 
 pub use adapter::LockfileAdapter;

@@ -86,6 +86,15 @@ pub enum Reason {
     /// fetch failed, or the in-toto subject didn't match
     /// `dist.integrity`.
     ProvenanceMissing,
+    /// Aggregate trust score fell below the configured floor.
+    /// `score` is the computed value; `threshold` is the policy
+    /// minimum. The full per-signal breakdown lives on the
+    /// dependency's audit record — this reason carries only the
+    /// numeric summary so logs stay grep-able.
+    TrustScoreBelowThreshold {
+        score: u8,
+        threshold: u8,
+    },
     SignalUnavailable {
         provider: String,
         reason: String,
@@ -112,6 +121,7 @@ impl Reason {
             Self::NameSquat { .. } => "name-squat",
             Self::MaintainerNewAccount { .. } => "maintainer-new-account",
             Self::ProvenanceMissing => "provenance-missing",
+            Self::TrustScoreBelowThreshold { .. } => "trust-score-below-threshold",
             Self::SignalUnavailable { .. } => "signal-unavailable",
         }
     }

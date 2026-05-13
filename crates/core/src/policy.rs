@@ -100,6 +100,14 @@ pub struct Defaults {
     /// for first-party deps in regulated environments.
     #[serde(default)]
     pub require_provenance: bool,
+    /// Minimum aggregate trust score in `[0, 100]` (see
+    /// [`crate::trust_score`]). `0` disables the check. The
+    /// score is computed from the full signal set after every
+    /// other detector has run; it acts as a *cumulative* gate
+    /// that catches dependencies whose individual signals each
+    /// look acceptable but together cross a risk budget.
+    #[serde(default)]
+    pub min_trust_score: u8,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
@@ -119,6 +127,8 @@ pub struct DirectOverrides {
     pub min_maintainer_account_age_days: Option<u32>,
     /// Per-direct-dep override for [`Defaults::require_provenance`].
     pub require_provenance: Option<bool>,
+    /// Per-direct-dep override for [`Defaults::min_trust_score`].
+    pub min_trust_score: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -350,6 +360,21 @@ impl Policy {
         if self.require_provenance_for(dep) && signals.provenance_claimed().is_none() {
             reasons.push(Reason::ProvenanceMissing);
         }
+        // ── Cumulative trust score ───────────────────────────────
+        // Runs last so it sees every signal that the providers
+        // produced. The score itself is logged on the dependency
+        // record (see audit emitter) regardless of whether it
+        // crosses the threshold; this branch only fires the Reason.
+        let trust_threshold = self.min_trust_score_for(dep);
+        if trust_threshold > 0 {
+            let score = crate::trust_score::TrustScore::compute(signals);
+            if score.value < trust_threshold {
+                reasons.push(Reason::TrustScoreBelowThreshold {
+                    score: score.value,
+                    threshold: trust_threshold,
+                });
+            }
+        }
         // ── Surface unavailability so it isn't silently swallowed ───────
         for sig in &signals.signals {
             if let crate::signal::Signal::Unavailable { provider, reason } = sig {
@@ -459,6 +484,16 @@ impl Policy {
                 .unwrap_or(self.defaults.require_provenance)
         } else {
             self.defaults.require_provenance
+        }
+    }
+
+    fn min_trust_score_for(&self, dep: &ResolvedDependency) -> u8 {
+        if dep.direct {
+            self.direct
+                .min_trust_score
+                .unwrap_or(self.defaults.min_trust_score)
+        } else {
+            self.defaults.min_trust_score
         }
     }
 
@@ -1269,5 +1304,79 @@ mod tests {
             Utc::now(),
         );
         assert!(matches!(d_direct, Decision::Block { .. }));
+    }
+
+    #[test]
+    fn trust_score_off_by_default() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        // A signal that would tank the score, but threshold is 0.
+        signals.push(Signal::NameSquat {
+            style: "typo".into(),
+            target: "react".into(),
+        });
+        // Allow other reasons (NameSquat itself blocks); just confirm
+        // no TrustScoreBelowThreshold reason emitted.
+        let d = p.evaluate(
+            &dep("foo", true, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        if let Decision::Block { reasons } = &d {
+            assert!(
+                reasons
+                    .iter()
+                    .all(|r| r.code() != "trust-score-below-threshold"),
+                "did not expect trust-score reason: {reasons:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn trust_score_blocks_below_threshold() {
+        let p = Policy::from_yaml("policyVersion: 1\ndefaults:\n  minTrustScore: 80\n").unwrap();
+        let mut signals = SignalSet::default();
+        // 100 - 15 - 10 = 75 < 80 — fires.
+        signals.push(Signal::LifecycleScripts {
+            scripts: vec!["postinstall".into()],
+        });
+        signals.push(Signal::DeprecatedVersion { message: None });
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        match d {
+            Decision::Block { reasons } => {
+                assert!(reasons.iter().any(|r| matches!(
+                    r,
+                    Reason::TrustScoreBelowThreshold {
+                        score: 75,
+                        threshold: 80
+                    }
+                )));
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn trust_score_quiet_above_threshold() {
+        let p = Policy::from_yaml("policyVersion: 1\ndefaults:\n  minTrustScore: 70\n").unwrap();
+        let mut signals = SignalSet::default();
+        // 100 - 10 = 90 >= 70.
+        signals.push(Signal::DeprecatedVersion { message: None });
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        // DeprecatedVersion fires its own reason, but trust-score
+        // should not — verify it's absent.
+        if let Decision::Block { reasons } = d {
+            assert!(reasons
+                .iter()
+                .all(|r| r.code() != "trust-score-below-threshold"));
+        }
     }
 }

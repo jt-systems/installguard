@@ -72,7 +72,7 @@ Move beyond age into the multi-signal model from the whitepaper §7.
 - ☑ Static analysis of install scripts (high-risk patterns: `curl|sh`, base64 `eval`, env-var exfil to non-registry hosts)
 - ☑ Typosquat / homoglyph proximity check at PR time (direct deps only)
 - ◐ Provenance attestation lookup and structural verification _(npm `dist.attestations` bundles parsed; in-toto subject digest matched against `dist.integrity`; full Sigstore Fulcio/Rekor signature verification deferred alongside the keyless-Sigstore slice — needs TUF root distribution)_
-- ☐ Trust-score computation with documented weights and explanation output
+- ☑ Trust-score computation with documented weights and explanation output
 
 **Exit criteria:** policies can express and enforce "block on publisher change for direct deps" and "warn on new postinstall" without scripting.
 
