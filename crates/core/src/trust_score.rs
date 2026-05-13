@@ -27,6 +27,7 @@
 //! - `name_squat`               −40  (likely impersonation)
 //! - `maintainer_new_account`   −20  (account-takeover signal)
 //! - `provenance_claimed`       +10  (structural attestation match)
+//! - `project_metadata` (archived) −10 (no longer maintained)
 //! - `advisory_known` (critical) −50  (known-vulnerable, critical)
 //! - `advisory_known` (high)     −35  (known-vulnerable, high)
 //! - `advisory_known` (medium)   −15  (known-vulnerable, medium)
@@ -142,6 +143,19 @@ fn score_signal(signal: &Signal) -> (&'static str, i16, &'static str) {
             10,
             "publisher signed a provenance bundle matching this tarball",
         ),
+        Signal::ProjectMetadata { archived, .. } => match archived {
+            // Archived projects are no longer maintained; small
+            // negative weight so the gate matters more than the
+            // score nudge. Non-archived projects contribute zero
+            // (they're the steady-state); license absence is a
+            // policy concern, not a generic risk.
+            Some(true) => (
+                "project_metadata",
+                -10,
+                "upstream project is marked archived in the catalogue",
+            ),
+            _ => ("project_metadata", 0, ""),
+        },
         Signal::AdvisoryKnown { severity, .. } => match severity.as_str() {
             "critical" => (
                 "advisory_known",

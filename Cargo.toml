@@ -9,6 +9,7 @@ members = [
     "crates/adapters/yarn",
     "crates/signals/npm-registry",
     "crates/signals/osv",
+    "crates/signals/depsdev",
 ]
 
 [workspace.package]
@@ -28,6 +29,7 @@ installguard-adapter-pnpm = { path = "crates/adapters/pnpm", version = "0.0.0" }
 installguard-adapter-yarn = { path = "crates/adapters/yarn", version = "0.0.0" }
 installguard-signal-npm-registry = { path = "crates/signals/npm-registry", version = "0.0.0" }
 installguard-signal-osv = { path = "crates/signals/osv", version = "0.0.0" }
+installguard-signal-depsdev = { path = "crates/signals/depsdev", version = "0.0.0" }
 installguard-cache = { path = "crates/cache", version = "0.0.0" }
 
 # External

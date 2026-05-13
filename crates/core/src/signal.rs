@@ -95,6 +95,19 @@ pub enum Signal {
         summary: String,
         source: String,
     },
+    /// Project-level metadata pulled from a third-party catalogue
+    /// (deps.dev today; pluggable in principle). `licenses` is the
+    /// SPDX expression list the catalogue records for the version
+    /// (lowercased / left as-published; we do not normalise SPDX
+    /// here — that's a license-allowlist concern). `archived`
+    /// reflects whether the catalogue marks the upstream project
+    /// as archived; `None` when the catalogue exposes no archive
+    /// status. `source` names the catalogue (`"deps.dev"`).
+    ProjectMetadata {
+        licenses: Vec<String>,
+        archived: Option<bool>,
+        source: String,
+    },
     /// The package version was published with npm provenance and
     /// the in-toto subject digest in the DSSE bundle matches the
     /// tarball's `dist.integrity` hash. This is a *structural*
@@ -259,6 +272,20 @@ impl SignalSet {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Returns the project-metadata signal if one was recorded.
+    /// Tuple is `(licenses, archived, source)`.
+    #[must_use]
+    pub fn project_metadata(&self) -> Option<(&[String], Option<bool>, &str)> {
+        self.signals.iter().find_map(|s| match s {
+            Signal::ProjectMetadata {
+                licenses,
+                archived,
+                source,
+            } => Some((licenses.as_slice(), *archived, source.as_str())),
+            _ => None,
+        })
     }
 
     pub fn push(&mut self, signal: Signal) {

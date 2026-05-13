@@ -96,6 +96,19 @@ pub enum Reason {
         severity: String,
         source: String,
     },
+    /// Policy required the dependency to declare a license but the
+    /// catalogue reported none.
+    LicenseMissing { source: String },
+    /// The catalogue's license declaration is not on the policy's
+    /// allowlist. `licenses` is the verbatim list reported by the
+    /// catalogue so the operator can copy it into their allowlist
+    /// without further lookups.
+    LicenseDisallowed {
+        licenses: Vec<String>,
+        source: String,
+    },
+    /// Upstream project is marked archived in the catalogue.
+    ProjectArchived { source: String },
     /// Aggregate trust score fell below the configured floor.
     /// `score` is the computed value; `threshold` is the policy
     /// minimum. The full per-signal breakdown lives on the
@@ -132,6 +145,9 @@ impl Reason {
             Self::MaintainerNewAccount { .. } => "maintainer-new-account",
             Self::ProvenanceMissing => "provenance-missing",
             Self::AdvisoryKnown { .. } => "advisory-known",
+            Self::LicenseMissing { .. } => "license-missing",
+            Self::LicenseDisallowed { .. } => "license-disallowed",
+            Self::ProjectArchived { .. } => "project-archived",
             Self::TrustScoreBelowThreshold { .. } => "trust-score-below-threshold",
             Self::SignalUnavailable { .. } => "signal-unavailable",
         }

@@ -17,6 +17,11 @@
     "Defaults": {
       "additionalProperties": false,
       "properties": {
+        "blockArchived": {
+          "default": false,
+          "description": "When `true`, dependencies whose project-metadata signal reports the upstream project as archived fire [`Reason::ProjectArchived`]. Off by default; common in regulated environments.",
+          "type": "boolean"
+        },
         "blockExoticSubdeps": {
           "default": false,
           "description": "Block dependencies whose source is not a registry or workspace.",
@@ -36,6 +41,14 @@
           "default": false,
           "description": "Emit a [`Reason::DeprecatedVersion`] when the registry reports the resolved version as deprecated. Default severity is `block`; many projects will want `severity.deprecated-version: warn` during a clean-up rollout.",
           "type": "boolean"
+        },
+        "licenseAllowlist": {
+          "default": [],
+          "description": "Optional allowlist of SPDX identifiers (case-insensitive, matched verbatim against the catalogue's report). Empty list disables the allowlist gate; non-empty enforces it strictly: any catalogue-reported license not on the list fires [`Reason::LicenseDisallowed`]. We deliberately do not parse SPDX expressions — operators who need expression matching can pre-normalise their allowlist.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "maxAdvisorySeverity": {
           "allOf": [
@@ -69,6 +82,11 @@
             "null"
           ]
         },
+        "requireLicense": {
+          "default": false,
+          "description": "When `true`, dependencies whose project-metadata signal reports no declared license fire [`Reason::LicenseMissing`]. Off by default — absence of catalogue data is common in the long tail of npm.",
+          "type": "boolean"
+        },
         "requireProvenance": {
           "default": false,
           "description": "Require the dependency to carry verified npm provenance (a Sigstore DSSE bundle whose in-toto subject digest matches the tarball integrity). When `true`, missing or unverifiable provenance is reported as [`Reason::ProvenanceMissing`]. Off by default — most of the npm ecosystem does not yet publish with `--provenance`, so global enforcement breaks builds. Recommended scope: `direct.requireProvenance: true` for first-party deps in regulated environments.",
@@ -80,6 +98,14 @@
     "DirectOverrides": {
       "additionalProperties": false,
       "properties": {
+        "blockArchived": {
+          "default": null,
+          "description": "Per-direct-dep override for [`Defaults::block_archived`].",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "detectPublisherChange": {
           "default": null,
           "description": "Per-direct-dep override for [`Defaults::detect_publisher_change`]. When `Some(_)`, takes precedence for direct deps.",
@@ -101,6 +127,17 @@
           "description": "Per-direct-dep override for [`Defaults::flag_deprecated`].",
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "licenseAllowlist": {
+          "default": null,
+          "description": "Per-direct-dep override for [`Defaults::license_allowlist`]. `None` defers to defaults; `Some(vec![])` explicitly *disables* the allowlist for direct deps.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -141,6 +178,14 @@
           "format": "int64",
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "requireLicense": {
+          "default": null,
+          "description": "Per-direct-dep override for [`Defaults::require_license`].",
+          "type": [
+            "boolean",
             "null"
           ]
         },
@@ -202,14 +247,17 @@
         }
       ],
       "default": {
+        "blockArchived": false,
         "blockExoticSubdeps": false,
         "detectPublisherChange": false,
         "detectVersionSurfaceChange": false,
         "flagDeprecated": false,
+        "licenseAllowlist": [],
         "maxAdvisorySeverity": "none",
         "minMaintainerAccountAgeDays": 0,
         "minTrustScore": 0,
         "minimumReleaseAge": null,
+        "requireLicense": false,
         "requireProvenance": false
       }
     },
@@ -220,13 +268,16 @@
         }
       ],
       "default": {
+        "blockArchived": null,
         "detectPublisherChange": null,
         "detectVersionSurfaceChange": null,
         "flagDeprecated": null,
+        "licenseAllowlist": null,
         "maxAdvisorySeverity": null,
         "minMaintainerAccountAgeDays": null,
         "minTrustScore": null,
         "minimumReleaseAge": null,
+        "requireLicense": null,
         "requireProvenance": null
       }
     },

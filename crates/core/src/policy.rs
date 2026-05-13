@@ -116,6 +116,27 @@ pub struct Defaults {
     /// `maxAdvisorySeverity: high`.
     #[serde(default)]
     pub max_advisory_severity: AdvisorySeverity,
+    /// When `true`, dependencies whose project-metadata signal
+    /// reports no declared license fire [`Reason::LicenseMissing`].
+    /// Off by default — absence of catalogue data is common in the
+    /// long tail of npm.
+    #[serde(default)]
+    pub require_license: bool,
+    /// Optional allowlist of SPDX identifiers (case-insensitive,
+    /// matched verbatim against the catalogue's report). Empty
+    /// list disables the allowlist gate; non-empty enforces it
+    /// strictly: any catalogue-reported license not on the list
+    /// fires [`Reason::LicenseDisallowed`]. We deliberately do not
+    /// parse SPDX expressions — operators who need expression
+    /// matching can pre-normalise their allowlist.
+    #[serde(default)]
+    pub license_allowlist: Vec<String>,
+    /// When `true`, dependencies whose project-metadata signal
+    /// reports the upstream project as archived fire
+    /// [`Reason::ProjectArchived`]. Off by default; common in
+    /// regulated environments.
+    #[serde(default)]
+    pub block_archived: bool,
 }
 
 /// Severity floor for the [`Reason::AdvisoryKnown`] gate.
@@ -182,6 +203,14 @@ pub struct DirectOverrides {
     pub min_trust_score: Option<u8>,
     /// Per-direct-dep override for [`Defaults::max_advisory_severity`].
     pub max_advisory_severity: Option<AdvisorySeverity>,
+    /// Per-direct-dep override for [`Defaults::require_license`].
+    pub require_license: Option<bool>,
+    /// Per-direct-dep override for [`Defaults::license_allowlist`].
+    /// `None` defers to defaults; `Some(vec![])` explicitly
+    /// *disables* the allowlist for direct deps.
+    pub license_allowlist: Option<Vec<String>>,
+    /// Per-direct-dep override for [`Defaults::block_archived`].
+    pub block_archived: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -430,6 +459,41 @@ impl Policy {
                 }
             }
         }
+        // ── Project-metadata gates ───────────────────────────────
+        // require_license: missing licenses[] fires LicenseMissing.
+        // license_allowlist: any license not on the list fires
+        // LicenseDisallowed (if the list is non-empty).
+        // block_archived: archived=Some(true) fires ProjectArchived.
+        // All three need a project_metadata signal to evaluate;
+        // absence of the signal is silent (catalogue might be down).
+        if let Some((licenses, archived, source)) = signals.project_metadata() {
+            if self.require_license_for(dep) && licenses.is_empty() {
+                reasons.push(Reason::LicenseMissing {
+                    source: source.to_string(),
+                });
+            }
+            let allowlist = self.license_allowlist_for(dep);
+            if !allowlist.is_empty() && !licenses.is_empty() {
+                let allow_lower: Vec<String> =
+                    allowlist.iter().map(|s| s.to_ascii_lowercase()).collect();
+                let disallowed: Vec<String> = licenses
+                    .iter()
+                    .filter(|l| !allow_lower.iter().any(|a| a == &l.to_ascii_lowercase()))
+                    .cloned()
+                    .collect();
+                if !disallowed.is_empty() {
+                    reasons.push(Reason::LicenseDisallowed {
+                        licenses: disallowed,
+                        source: source.to_string(),
+                    });
+                }
+            }
+            if self.block_archived_for(dep) && archived == Some(true) {
+                reasons.push(Reason::ProjectArchived {
+                    source: source.to_string(),
+                });
+            }
+        }
         // ── Cumulative trust score ───────────────────────────────
         // Runs last so it sees every signal that the providers
         // produced. The score itself is logged on the dependency
@@ -574,6 +638,37 @@ impl Policy {
                 .unwrap_or(self.defaults.max_advisory_severity)
         } else {
             self.defaults.max_advisory_severity
+        }
+    }
+
+    fn require_license_for(&self, dep: &ResolvedDependency) -> bool {
+        if dep.direct {
+            self.direct
+                .require_license
+                .unwrap_or(self.defaults.require_license)
+        } else {
+            self.defaults.require_license
+        }
+    }
+
+    fn license_allowlist_for<'a>(&'a self, dep: &ResolvedDependency) -> &'a [String] {
+        if dep.direct {
+            self.direct
+                .license_allowlist
+                .as_deref()
+                .unwrap_or(&self.defaults.license_allowlist)
+        } else {
+            &self.defaults.license_allowlist
+        }
+    }
+
+    fn block_archived_for(&self, dep: &ResolvedDependency) -> bool {
+        if dep.direct {
+            self.direct
+                .block_archived
+                .unwrap_or(self.defaults.block_archived)
+        } else {
+            self.defaults.block_archived
         }
     }
 
@@ -1534,5 +1629,116 @@ mod tests {
             Utc::now(),
         );
         assert!(matches!(d2, Decision::Block { .. }), "got {d2:?}");
+    }
+
+    fn project(licenses: &[&str], archived: Option<bool>) -> Signal {
+        Signal::ProjectMetadata {
+            licenses: licenses.iter().map(|s| (*s).to_string()).collect(),
+            archived,
+            source: "deps.dev".into(),
+        }
+    }
+
+    #[test]
+    fn license_gates_off_by_default() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(project(&[], Some(true)));
+        let d = p.evaluate(
+            &dep("foo", true, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Allow), "got {d:?}");
+    }
+
+    #[test]
+    fn require_license_fires_only_on_empty_list() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\ndefaults:\n  requireLicense: true\n").unwrap();
+        let mut empty = SignalSet::default();
+        empty.push(project(&[], None));
+        let d_empty = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &empty,
+            Utc::now(),
+        );
+        assert!(matches!(d_empty, Decision::Block { .. }));
+
+        let mut populated = SignalSet::default();
+        populated.push(project(&["MIT"], None));
+        let d_ok = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &populated,
+            Utc::now(),
+        );
+        assert!(matches!(d_ok, Decision::Allow));
+    }
+
+    #[test]
+    fn license_allowlist_blocks_disallowed_and_is_case_insensitive() {
+        let p = Policy::from_yaml(
+            "policyVersion: 1\ndefaults:\n  licenseAllowlist: [\"MIT\", \"Apache-2.0\"]\n",
+        )
+        .unwrap();
+        let mut allowed = SignalSet::default();
+        allowed.push(project(&["mit"], None));
+        let d_allowed = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &allowed,
+            Utc::now(),
+        );
+        assert!(matches!(d_allowed, Decision::Allow));
+        let mut bad = SignalSet::default();
+        bad.push(project(&["GPL-3.0"], None));
+        let d_bad = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &bad,
+            Utc::now(),
+        );
+        match d_bad {
+            Decision::Block { reasons } => {
+                assert!(reasons.iter().any(|r| matches!(
+                    r,
+                    Reason::LicenseDisallowed { licenses, .. }
+                        if licenses == &vec!["GPL-3.0".to_string()]
+                )));
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn block_archived_only_fires_when_archived_true() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\ndefaults:\n  blockArchived: true\n").unwrap();
+        let mut archived = SignalSet::default();
+        archived.push(project(&["MIT"], Some(true)));
+        let d_archived = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &archived,
+            Utc::now(),
+        );
+        assert!(matches!(d_archived, Decision::Block { .. }));
+
+        let mut not_archived = SignalSet::default();
+        not_archived.push(project(&["MIT"], Some(false)));
+        let d_not = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &not_archived,
+            Utc::now(),
+        );
+        assert!(matches!(d_not, Decision::Allow));
+
+        // Unknown archived status (None) does not fire — silence
+        // is not suspicion.
+        let mut unknown = SignalSet::default();
+        unknown.push(project(&["MIT"], None));
+        let d_unknown = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &unknown,
+            Utc::now(),
+        );
+        assert!(matches!(d_unknown, Decision::Allow));
     }
 }

@@ -266,6 +266,7 @@ fn signal_kind(s: &Signal) -> String {
         Signal::MaintainerNewAccount { .. } => "maintainer_new_account",
         Signal::ProvenanceClaimed { .. } => "provenance_claimed",
         Signal::AdvisoryKnown { .. } => "advisory_known",
+        Signal::ProjectMetadata { .. } => "project_metadata",
         Signal::Unavailable { .. } => "unavailable",
     }
     .to_string()

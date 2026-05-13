@@ -246,6 +246,16 @@ fn summarise(r: &Reason) -> String {
             severity,
             source,
         } => format!("advisory {id} ({severity}) reported by {source}"),
+        Reason::LicenseMissing { source } => {
+            format!("no license declared in {source}")
+        }
+        Reason::LicenseDisallowed { licenses, source } => format!(
+            "license `{}` (per {source}) is not on the policy allowlist",
+            licenses.join(", ")
+        ),
+        Reason::ProjectArchived { source } => {
+            format!("upstream project is marked archived in {source}")
+        }
         Reason::TrustScoreBelowThreshold { score, threshold } => {
             format!("trust score {score}/100 is below the {threshold} threshold")
         }
