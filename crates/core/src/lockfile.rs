@@ -257,6 +257,7 @@ fn signal_kind(s: &Signal) -> String {
     match s {
         Signal::PublishedAt { .. } => "published_at",
         Signal::LifecycleScripts { .. } => "lifecycle_scripts",
+        Signal::PublisherChange { .. } => "publisher_change",
         Signal::Unavailable { .. } => "unavailable",
     }
     .to_string()

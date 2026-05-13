@@ -10,6 +10,11 @@
           "description": "Block dependencies whose source is not a registry or workspace.",
           "type": "boolean"
         },
+        "detectPublisherChange": {
+          "default": false,
+          "description": "Emit a [`Reason::PublisherChange`] when the resolved version was published by a different npm account than the immediately-prior version. Default severity is `block`; downgrade via the `severity` map (e.g. `publisher-change: warn`).",
+          "type": "boolean"
+        },
         "minimumReleaseAge": {
           "default": null,
           "description": "Minimum release age in minutes. `0` disables the check.",
@@ -25,6 +30,14 @@
     "DirectOverrides": {
       "additionalProperties": false,
       "properties": {
+        "detectPublisherChange": {
+          "default": null,
+          "description": "Per-direct-dep override for [`Defaults::detect_publisher_change`]. When `Some(_)`, takes precedence for direct deps.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "minimumReleaseAge": {
           "default": null,
           "format": "int64",
@@ -84,6 +97,7 @@
       ],
       "default": {
         "blockExoticSubdeps": false,
+        "detectPublisherChange": false,
         "minimumReleaseAge": null
       }
     },
@@ -94,6 +108,7 @@
         }
       ],
       "default": {
+        "detectPublisherChange": null,
         "minimumReleaseAge": null
       }
     },

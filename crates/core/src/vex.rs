@@ -189,6 +189,13 @@ fn summarise(r: &Reason) -> String {
             format!("lifecycle script `{script}` present but install runs with --ignore-scripts")
         }
         Reason::PublishedAtUnknown => "registry did not return a published-at timestamp".into(),
+        Reason::PublisherChange {
+            previous_version,
+            previous,
+            current,
+        } => format!(
+            "publisher changed: {previous_version} was published by `{previous}`, current by `{current}`"
+        ),
         Reason::SignalUnavailable { provider, reason } => {
             format!("signal provider `{provider}` unavailable: {reason}")
         }

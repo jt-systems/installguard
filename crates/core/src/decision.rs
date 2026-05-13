@@ -26,6 +26,15 @@ pub enum Reason {
         script: String,
     },
     PublishedAtUnknown,
+    /// The publisher of the resolved version differs from the publisher
+    /// of the immediately-prior released version. Carries both
+    /// publishers and the previous version so audit logs and `verify`
+    /// have enough context to investigate.
+    PublisherChange {
+        previous_version: String,
+        previous: String,
+        current: String,
+    },
     SignalUnavailable {
         provider: String,
         reason: String,
@@ -44,6 +53,7 @@ impl Reason {
             Self::DisallowedLifecycleScript { .. } => "disallowed-lifecycle-script",
             Self::LifecycleScriptIgnored { .. } => "lifecycle-script-ignored",
             Self::PublishedAtUnknown => "published-at-unknown",
+            Self::PublisherChange { .. } => "publisher-change",
             Self::SignalUnavailable { .. } => "signal-unavailable",
         }
     }

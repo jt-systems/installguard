@@ -14,6 +14,17 @@ pub enum Signal {
     PublishedAt { at: DateTime<Utc> },
     /// Lifecycle scripts declared in `package.json`.
     LifecycleScripts { scripts: Vec<String> },
+    /// The npm publisher (`_npmUser.name`) for the resolved version
+    /// differs from the publisher of the immediately-prior released
+    /// version. A common precursor to account-takeover supply-chain
+    /// attacks (cf. event-stream, ua-parser-js). `previous_version` is
+    /// the highest released version strictly less than the resolved
+    /// version under semver ordering.
+    PublisherChange {
+        previous_version: String,
+        previous: String,
+        current: String,
+    },
     /// The provider could not produce signals for this dependency. Always
     /// recorded so policy can decide how to treat unknowns.
     Unavailable { provider: String, reason: String },
@@ -38,6 +49,24 @@ impl SignalSet {
     pub fn lifecycle_scripts(&self) -> Option<&[String]> {
         self.signals.iter().find_map(|s| match s {
             Signal::LifecycleScripts { scripts } => Some(scripts.as_slice()),
+            _ => None,
+        })
+    }
+
+    /// Returns the publisher-change signal if one was recorded.
+    /// Tuple is `(previous_version, previous_publisher, current_publisher)`.
+    #[must_use]
+    pub fn publisher_change(&self) -> Option<(&str, &str, &str)> {
+        self.signals.iter().find_map(|s| match s {
+            Signal::PublisherChange {
+                previous_version,
+                previous,
+                current,
+            } => Some((
+                previous_version.as_str(),
+                previous.as_str(),
+                current.as_str(),
+            )),
             _ => None,
         })
     }

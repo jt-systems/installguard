@@ -59,12 +59,21 @@ pub struct Defaults {
     /// Block dependencies whose source is not a registry or workspace.
     #[serde(default)]
     pub block_exotic_subdeps: bool,
+    /// Emit a [`Reason::PublisherChange`] when the resolved version was
+    /// published by a different npm account than the immediately-prior
+    /// version. Default severity is `block`; downgrade via the
+    /// `severity` map (e.g. `publisher-change: warn`).
+    #[serde(default)]
+    pub detect_publisher_change: bool,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct DirectOverrides {
     pub minimum_release_age: Option<i64>,
+    /// Per-direct-dep override for [`Defaults::detect_publisher_change`].
+    /// When `Some(_)`, takes precedence for direct deps.
+    pub detect_publisher_change: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -206,6 +215,17 @@ impl Policy {
             }
         }
 
+        // ── Publisher change ────────────────────────────────────────────
+        if self.detect_publisher_change_for(dep) {
+            if let Some((prev_v, prev, cur)) = signals.publisher_change() {
+                reasons.push(Reason::PublisherChange {
+                    previous_version: prev_v.to_string(),
+                    previous: prev.to_string(),
+                    current: cur.to_string(),
+                });
+            }
+        }
+
         // ── Surface unavailability so it isn't silently swallowed ───────
         for sig in &signals.signals {
             if let crate::signal::Signal::Unavailable { provider, reason } = sig {
@@ -265,6 +285,16 @@ impl Policy {
                 .unwrap_or(0)
         } else {
             self.defaults.minimum_release_age.unwrap_or(0)
+        }
+    }
+
+    fn detect_publisher_change_for(&self, dep: &ResolvedDependency) -> bool {
+        if dep.direct {
+            self.direct
+                .detect_publisher_change
+                .unwrap_or(self.defaults.detect_publisher_change)
+        } else {
+            self.defaults.detect_publisher_change
         }
     }
 
@@ -572,5 +602,93 @@ mod tests {
             },
         );
         assert!(d.is_block(), "got {d:?}");
+    }
+
+    #[test]
+    fn publisher_change_blocks_when_enabled() {
+        let p = Policy::from_yaml("policyVersion: 1\ndefaults:\n  detectPublisherChange: true\n")
+            .unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::PublisherChange {
+            previous_version: "1.7.8".into(),
+            previous: "alice".into(),
+            current: "mallory".into(),
+        });
+        let d = p.evaluate(
+            &dep("axios", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        match d {
+            Decision::Block { reasons } => {
+                assert_eq!(reasons.len(), 1);
+                assert_eq!(reasons[0].code(), "publisher-change");
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn publisher_change_silent_when_disabled() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::PublisherChange {
+            previous_version: "1.7.8".into(),
+            previous: "alice".into(),
+            current: "mallory".into(),
+        });
+        let d = p.evaluate(
+            &dep("axios", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Allow));
+    }
+
+    #[test]
+    fn publisher_change_can_be_demoted_to_warn() {
+        let p = Policy::from_yaml(
+            "policyVersion: 1\n\
+             defaults:\n  detectPublisherChange: true\n\
+             severity:\n  publisher-change: warn\n",
+        )
+        .unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::PublisherChange {
+            previous_version: "1.7.8".into(),
+            previous: "alice".into(),
+            current: "mallory".into(),
+        });
+        let d = p.evaluate(
+            &dep("axios", true, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Warn { .. }), "got {d:?}");
+    }
+
+    #[test]
+    fn publisher_change_direct_only_via_override() {
+        // Defaults off; direct override on. Direct deps detect, transitive ignore.
+        let p = Policy::from_yaml("policyVersion: 1\ndirect:\n  detectPublisherChange: true\n")
+            .unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::PublisherChange {
+            previous_version: "1.7.8".into(),
+            previous: "alice".into(),
+            current: "mallory".into(),
+        });
+        let direct = p.evaluate(
+            &dep("axios", true, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(direct.is_block(), "direct should block: {direct:?}");
+        let transitive = p.evaluate(
+            &dep("axios", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(transitive, Decision::Allow));
     }
 }
