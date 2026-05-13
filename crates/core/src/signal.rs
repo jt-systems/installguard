@@ -32,6 +32,15 @@ pub enum Signal {
     /// versions to be pulled out of circulation while existing
     /// lockfiles continue to pin them.
     DeprecatedVersion { message: Option<String> },
+    /// A lifecycle script body matched a high-risk pattern from
+    /// `script_scan`. One signal per (script, pattern); `excerpt` is a
+    /// short, UTF-8-safe slice of the script body around the match,
+    /// suitable for embedding in audit logs without bloating them.
+    SuspiciousScript {
+        script: String,
+        pattern: String,
+        excerpt: String,
+    },
     /// The provider could not produce signals for this dependency. Always
     /// recorded so policy can decide how to treat unknowns.
     Unavailable { provider: String, reason: String },
@@ -85,6 +94,19 @@ impl SignalSet {
     pub fn deprecated(&self) -> Option<Option<&str>> {
         self.signals.iter().find_map(|s| match s {
             Signal::DeprecatedVersion { message } => Some(message.as_deref()),
+            _ => None,
+        })
+    }
+
+    /// Iterator over all suspicious-script findings recorded for this
+    /// dependency. Tuple is `(script, pattern, excerpt)`.
+    pub fn suspicious_scripts(&self) -> impl Iterator<Item = (&str, &str, &str)> + '_ {
+        self.signals.iter().filter_map(|s| match s {
+            Signal::SuspiciousScript {
+                script,
+                pattern,
+                excerpt,
+            } => Some((script.as_str(), pattern.as_str(), excerpt.as_str())),
             _ => None,
         })
     }

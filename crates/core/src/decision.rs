@@ -40,6 +40,14 @@ pub enum Reason {
     DeprecatedVersion {
         message: Option<String>,
     },
+    /// A lifecycle script body matched a high-risk pattern from
+    /// `script_scan` (e.g. `curl ... | sh`, `base64 -d | sh`,
+    /// `/dev/tcp` reverse shell). One reason per (script, pattern).
+    SuspiciousScript {
+        script: String,
+        pattern: String,
+        excerpt: String,
+    },
     SignalUnavailable {
         provider: String,
         reason: String,
@@ -60,6 +68,7 @@ impl Reason {
             Self::PublishedAtUnknown => "published-at-unknown",
             Self::PublisherChange { .. } => "publisher-change",
             Self::DeprecatedVersion { .. } => "deprecated-version",
+            Self::SuspiciousScript { .. } => "suspicious-script",
             Self::SignalUnavailable { .. } => "signal-unavailable",
         }
     }

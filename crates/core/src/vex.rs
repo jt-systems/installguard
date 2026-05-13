@@ -200,6 +200,11 @@ fn summarise(r: &Reason) -> String {
             Some(m) if !m.is_empty() => format!("registry-deprecated: {m}"),
             _ => "registry marked this version deprecated".to_string(),
         },
+        Reason::SuspiciousScript {
+            script,
+            pattern,
+            excerpt,
+        } => format!("lifecycle script `{script}` matched `{pattern}`: {excerpt}"),
         Reason::SignalUnavailable { provider, reason } => {
             format!("signal provider `{provider}` unavailable: {reason}")
         }
