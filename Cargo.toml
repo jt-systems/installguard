@@ -1,0 +1,67 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/cli",
+    "crates/cache",
+    "crates/adapters/npm",
+    "crates/adapters/pnpm",
+    "crates/adapters/yarn",
+    "crates/signals/npm-registry",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.86"
+license = "Apache-2.0"
+repository = "https://github.com/jthomas/installguard"
+homepage = "https://github.com/jthomas/installguard"
+authors = ["InstallGuard contributors"]
+
+[workspace.dependencies]
+# Internal
+installguard-core = { path = "crates/core", version = "0.0.0" }
+installguard-adapter-npm = { path = "crates/adapters/npm", version = "0.0.0" }
+installguard-adapter-pnpm = { path = "crates/adapters/pnpm", version = "0.0.0" }
+installguard-adapter-yarn = { path = "crates/adapters/yarn", version = "0.0.0" }
+installguard-signal-npm-registry = { path = "crates/signals/npm-registry", version = "0.0.0" }
+installguard-cache = { path = "crates/cache", version = "0.0.0" }
+
+# External
+anyhow = "1.0"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.38", features = ["macros", "rt-multi-thread", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures = "0.3"
+async-trait = "0.1"
+schemars = { version = "0.8", features = ["chrono"] }
+sha2 = "0.10"
+hex = "0.4"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
