@@ -51,7 +51,7 @@ Make decisions reproducible and provable.
 - ☑ in-toto v1 attestation predicate `policy-evaluation/v1`
 - ☐ Sigstore signing (cosign keyless and KMS)
 - ◐ `installguard verify` against a signed attestation _(unsigned-lock verify shipped; signed-attestation path depends on Sigstore wiring)_
-- ☐ CycloneDX SBOM export with policy-decision properties
+- ☑ CycloneDX SBOM export with policy-decision properties
 - ☐ VEX statement export per package decision
 - ☐ Audit log sink (JSONL) with stable schema
 

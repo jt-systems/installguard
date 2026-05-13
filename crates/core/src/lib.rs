@@ -12,6 +12,7 @@ pub mod decision;
 pub mod dependency;
 pub mod lockfile;
 pub mod policy;
+pub mod sbom;
 pub mod signal;
 
 pub use adapter::LockfileAdapter;

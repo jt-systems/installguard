@@ -56,6 +56,10 @@ enum Command {
     /// `https://installguard.dev/policy-evaluation/v1`. Pair with cosign
     /// or any DSSE signer to produce a signed attestation.
     Attest(AttestArgs),
+    /// Emit a CycloneDX 1.5 SBOM (JSON) with InstallGuard policy
+    /// decisions attached as `installguard:*` properties on each
+    /// component.
+    Sbom(SbomArgs),
 }
 
 /// Inputs shared by `scan` and `ci`.
@@ -168,6 +172,17 @@ struct AttestArgs {
     pretty: bool,
 }
 
+#[derive(Debug, clap::Args)]
+struct SbomArgs {
+    #[command(flatten)]
+    common: EvalArgs,
+
+    /// Output path for the SBOM JSON. Defaults to
+    /// `<path>/installguard.cdx.json`. Use `-` to write to stdout.
+    #[arg(long)]
+    out: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum OutputFormat {
     Human,
@@ -192,6 +207,7 @@ async fn main() -> ExitCode {
         Command::Lock(args) => run_lock(args).await,
         Command::Verify(args) => run_verify(args).await,
         Command::Attest(args) => run_attest(args).await,
+        Command::Sbom(args) => run_sbom(args).await,
     };
     match result {
         Ok(code) => code,
@@ -585,6 +601,45 @@ async fn run_attest(args: AttestArgs) -> Result<ExitCode> {
             dest.display(),
             installguard_core::attestation::PREDICATE_TYPE,
             statement.predicate.summary.total,
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+// ── `sbom` subcommand ───────────────────────────────────────────────────────
+
+async fn run_sbom(args: SbomArgs) -> Result<ExitCode> {
+    use installguard_core::lockfile::sha256_hex;
+    use installguard_core::sbom::{Bom, SbomEntry};
+
+    let out = evaluate(&args.common).await?;
+    let entries: Vec<SbomEntry<'_>> = out
+        .results
+        .iter()
+        .map(|r| SbomEntry {
+            dep: &r.dep,
+            decision: &r.decision,
+        })
+        .collect();
+    let bom = Bom::build(
+        &entries,
+        &sha256_hex(&out.lockfile_bytes),
+        chrono::Utc::now(),
+        env!("CARGO_PKG_VERSION"),
+    );
+    let json = bom.to_json().context("serialising sbom")?;
+
+    let dest = args
+        .out
+        .unwrap_or_else(|| args.common.path.join("installguard.cdx.json"));
+    if dest.as_os_str() == "-" {
+        print!("{json}");
+    } else {
+        std::fs::write(&dest, &json).with_context(|| format!("writing sbom {}", dest.display()))?;
+        eprintln!(
+            "wrote {} (CycloneDX 1.5, {} components)",
+            dest.display(),
+            bom.components.len(),
         );
     }
     Ok(ExitCode::SUCCESS)
