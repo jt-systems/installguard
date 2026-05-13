@@ -47,7 +47,7 @@ Make the tool useful in pipelines and PRs without yet enforcing org-wide.
 Make decisions reproducible and provable.
 
 - ☑ `installguard.lock` writer/reader with stable, deterministic JSON
-- ☐ `--frozen-policy` mode (re-verify offline against a recorded snapshot)
+- ☑ `--frozen-policy` mode (re-verify offline against a recorded snapshot)
 - ☐ in-toto v1 attestation predicate `policy-evaluation/v1`
 - ☐ Sigstore signing (cosign keyless and KMS)
 - ◐ `installguard verify` against a signed attestation _(unsigned-lock verify shipped; signed-attestation path depends on Sigstore wiring)_

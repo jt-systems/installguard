@@ -273,12 +273,28 @@ fn source_kind(s: &Source) -> &'static str {
     }
 }
 
+/// SHA-256 hex digest of the canonicalised policy JSON. Same value used
+/// by `InstallguardLock::build` for the `policy_digest` field; exposed so
+/// callers (e.g. `--frozen` mode) can re-hash the on-disk policy without
+/// rebuilding the whole lock.
+pub fn policy_digest_hex(policy: &Policy) -> Result<String, LockError> {
+    policy_digest(policy)
+}
+
 fn policy_digest(policy: &Policy) -> Result<String, LockError> {
     // Round-trip through serde_json::Value so that every map key is sorted
     // (BTreeMap-backed) and the byte form is stable.
     let value = serde_json::to_value(policy)?;
     let canonical = serde_json::to_vec(&value)?;
     Ok(hex_sha256(&canonical))
+}
+
+/// SHA-256 hex digest of arbitrary bytes. Same algorithm and encoding
+/// used for `lockfile_digest` so callers can re-hash a candidate file
+/// without depending on the `sha2` crate directly.
+#[must_use]
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    hex_sha256(bytes)
 }
 
 fn hex_sha256(bytes: &[u8]) -> String {

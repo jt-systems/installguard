@@ -82,6 +82,18 @@ struct EvalArgs {
     /// containing `ignore-scripts=true`.
     #[arg(long)]
     ignore_scripts: bool,
+
+    /// Read decisions from `installguard.lock` instead of contacting any
+    /// signal provider. The lockfile and policy digests must match the
+    /// values recorded in the lock; mismatches abort with exit 2.
+    /// Use this for fully offline / air-gapped CI runs.
+    #[arg(long)]
+    frozen: bool,
+
+    /// Override the path to the lock file (used by `--frozen`). Defaults
+    /// to `<path>/installguard.lock`.
+    #[arg(long)]
+    lock: Option<PathBuf>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -184,6 +196,9 @@ struct EvalOutput {
 }
 
 async fn evaluate(args: &EvalArgs) -> Result<EvalOutput> {
+    if args.frozen {
+        return evaluate_frozen(args);
+    }
     let adapters: Vec<Box<dyn LockfileAdapter>> = vec![
         Box::new(PnpmAdapter::new()),
         Box::new(YarnAdapter::new()),
@@ -242,6 +257,140 @@ async fn evaluate(args: &EvalArgs) -> Result<EvalOutput> {
         policy,
         results,
     })
+}
+
+/// Frozen-policy evaluation: load `installguard.lock` and emit decisions
+/// from it. No adapter parse, no signal fetch, no network access.
+///
+/// Refuses to proceed if the current lockfile bytes or policy file digest
+/// drift from the values recorded in the lock; that's a hard error rather
+/// than a drift report because the lock no longer represents the project's
+/// actual state.
+fn evaluate_frozen(args: &EvalArgs) -> Result<EvalOutput> {
+    use installguard_core::dependency::Ecosystem;
+    use installguard_core::lockfile::{policy_digest_hex, sha256_hex, InstallguardLock};
+
+    let lock_path = args
+        .lock
+        .clone()
+        .unwrap_or_else(|| args.path.join("installguard.lock"));
+    let raw = std::fs::read_to_string(&lock_path)
+        .with_context(|| format!("reading lock {}", lock_path.display()))?;
+    let lock = InstallguardLock::from_json(&raw)
+        .with_context(|| format!("parsing lock {}", lock_path.display()))?;
+
+    // Resolve the original lockfile and re-hash it so we fail loudly on
+    // drift rather than silently use stale decisions.
+    let lockfile_path = args.path.join(&lock.lockfile);
+    let lockfile_bytes = std::fs::read(&lockfile_path)
+        .with_context(|| format!("reading {}", lockfile_path.display()))?;
+    let cur_lockfile_digest = sha256_hex(&lockfile_bytes);
+    if cur_lockfile_digest != lock.lockfile_digest {
+        anyhow::bail!(
+            "frozen-policy: lockfile {} has drifted (recorded {}, found {}); \
+             re-run `installguard lock` to refresh",
+            lockfile_path.display(),
+            short(&lock.lockfile_digest),
+            short(&cur_lockfile_digest),
+        );
+    }
+
+    // Load the policy purely so we can digest it. We do *not* re-evaluate.
+    let policy_path = args
+        .policy
+        .clone()
+        .unwrap_or_else(|| args.path.join("installguard.yaml"));
+    let policy = if policy_path.exists() {
+        Policy::from_path(&policy_path)
+            .with_context(|| format!("loading policy {}", policy_path.display()))?
+    } else {
+        Policy::default()
+    };
+    let cur_policy_digest = policy_digest_hex(&policy).context("digesting policy")?;
+    if cur_policy_digest != lock.policy_digest {
+        anyhow::bail!(
+            "frozen-policy: policy {} has drifted (recorded {}, found {}); \
+             re-run `installguard lock` to refresh",
+            policy_path.display(),
+            short(&lock.policy_digest),
+            short(&cur_policy_digest),
+        );
+    }
+
+    tracing::info!(
+        path = %lock_path.display(),
+        "frozen-policy: emitting decisions from lock"
+    );
+
+    let results: Vec<DepResult> = lock
+        .decisions
+        .iter()
+        .map(|d| DepResult {
+            dep: ResolvedDependency {
+                ecosystem: Ecosystem::Npm,
+                name: d.name.clone(),
+                version: d.version.clone(),
+                integrity: None,
+                source: source_from_kind(&d.source),
+                direct: d.direct,
+                requested_by: Vec::new(),
+            },
+            signals: SignalSet::default(),
+            decision: match d.decision.as_str() {
+                "allow" => Decision::Allow,
+                "warn" => Decision::Warn {
+                    reasons: d.reasons.clone(),
+                },
+                _ => Decision::Block {
+                    reasons: d.reasons.clone(),
+                },
+            },
+        })
+        .collect();
+
+    Ok(EvalOutput {
+        lockfile: lockfile_path,
+        lockfile_bytes,
+        adapter_id: lock_str_to_adapter(&lock.adapter),
+        policy,
+        results,
+    })
+}
+
+fn source_from_kind(kind: &str) -> installguard_core::dependency::Source {
+    use installguard_core::dependency::Source;
+    match kind {
+        "workspace" => Source::Workspace,
+        "git" => Source::Git {
+            url: String::new(),
+            reference: None,
+        },
+        "github" => Source::GithubShortcut {
+            spec: String::new(),
+        },
+        "tarball" => Source::Tarball { url: String::new() },
+        "file" => Source::File {
+            path: String::new(),
+        },
+        // Default to Registry for unknown source kinds; the lock has
+        // already been verified by digest so this is safe.
+        _ => Source::Registry { url: String::new() },
+    }
+}
+
+fn lock_str_to_adapter(s: &str) -> &'static str {
+    match s {
+        "npm" => "npm",
+        "pnpm" => "pnpm",
+        "yarn" => "yarn",
+        // Adapter id is informational in frozen mode; fall through to a
+        // stable label rather than failing on unknown values.
+        _ => "frozen",
+    }
+}
+
+fn short(digest: &str) -> &str {
+    digest.get(..12).unwrap_or(digest)
 }
 
 fn locate_lockfile<'a>(
