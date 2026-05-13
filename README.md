@@ -71,10 +71,13 @@ Comparison table in [whitepaper §17](whitepaper.md#17-comparison-with-existing-
 
 ## Quick start
 
-> **Alpha — no tagged releases yet.** Build from source while M5+ stabilises packaging.
+> **Alpha — `0.1.0`.** Pre-built binaries land with the first tagged release; until then both install paths build from source.
 
 ```bash
-# Build from source (Rust 1.86+)
+# Homebrew (macOS, Linux) — once jthomas/homebrew-installguard is published:
+brew install jthomas/installguard/installguard
+
+# Or build from source (Rust 1.86+):
 cargo install --path crates/cli
 
 # Initialise a baseline policy
