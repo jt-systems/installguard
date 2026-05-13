@@ -18,6 +18,7 @@ use installguard_adapter_pnpm::PnpmAdapter;
 use installguard_adapter_yarn::YarnAdapter;
 use installguard_cache::{CachedProvider, SignalCache, Ttl};
 use installguard_core::adapter::LockfileAdapter;
+use installguard_core::attestation::Statement;
 use installguard_core::decision::{Decision, Reason};
 use installguard_core::dependency::ResolvedDependency;
 use installguard_core::lockfile::{InstallguardLock, LockEntry};
@@ -50,6 +51,11 @@ enum Command {
     /// previously generated `installguard.lock`. Exits non-zero on any
     /// drift in lockfile, policy, or per-package decisions.
     Verify(VerifyArgs),
+    /// Emit an unsigned in-toto v1 Statement wrapping the policy
+    /// evaluation as predicate type
+    /// `https://installguard.dev/policy-evaluation/v1`. Pair with cosign
+    /// or any DSSE signer to produce a signed attestation.
+    Attest(AttestArgs),
 }
 
 /// Inputs shared by `scan` and `ci`.
@@ -146,6 +152,22 @@ struct VerifyArgs {
     against: Option<PathBuf>,
 }
 
+#[derive(Debug, clap::Args)]
+struct AttestArgs {
+    #[command(flatten)]
+    common: EvalArgs,
+
+    /// Output path for the statement JSON. Defaults to
+    /// `<path>/installguard.intoto.json`. Use `-` to write to stdout.
+    #[arg(long)]
+    out: Option<PathBuf>,
+
+    /// Pretty-print the statement (indented). Default is compact
+    /// single-line JSON suitable for direct DSSE payload wrapping.
+    #[arg(long)]
+    pretty: bool,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum OutputFormat {
     Human,
@@ -169,6 +191,7 @@ async fn main() -> ExitCode {
         Command::Schema => run_schema(),
         Command::Lock(args) => run_lock(args).await,
         Command::Verify(args) => run_verify(args).await,
+        Command::Attest(args) => run_attest(args).await,
     };
     match result {
         Ok(code) => code,
@@ -535,8 +558,39 @@ async fn run_lock(args: LockArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-// ── `verify` subcommand ─────────────────────────────────────────────────────
+// ── `attest` subcommand ─────────────────────────────────────────────────────
 
+async fn run_attest(args: AttestArgs) -> Result<ExitCode> {
+    let out = evaluate(&args.common).await?;
+    let lock = build_lock(&args.common, &out)?;
+    let statement = Statement::from_lock(lock);
+    let json = if args.pretty {
+        statement.to_json().context("serialising statement")?
+    } else {
+        let mut s = serde_json::to_string(&statement).context("serialising statement")?;
+        s.push('\n');
+        s
+    };
+
+    let dest = args
+        .out
+        .unwrap_or_else(|| args.common.path.join("installguard.intoto.json"));
+    if dest.as_os_str() == "-" {
+        print!("{json}");
+    } else {
+        std::fs::write(&dest, &json)
+            .with_context(|| format!("writing statement {}", dest.display()))?;
+        eprintln!(
+            "wrote {} (predicateType {}, {} packages)",
+            dest.display(),
+            installguard_core::attestation::PREDICATE_TYPE,
+            statement.predicate.summary.total,
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+// ── `verify` subcommand ─────────────────────────────────────────────────────
 async fn run_verify(args: VerifyArgs) -> Result<ExitCode> {
     let lock_path = args
         .against

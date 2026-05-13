@@ -7,6 +7,7 @@
 #![doc(html_root_url = "https://docs.rs/installguard-core/0.0.0")]
 
 pub mod adapter;
+pub mod attestation;
 pub mod decision;
 pub mod dependency;
 pub mod lockfile;
@@ -14,6 +15,7 @@ pub mod policy;
 pub mod signal;
 
 pub use adapter::LockfileAdapter;
+pub use attestation::{Statement, PREDICATE_TYPE, STATEMENT_TYPE};
 pub use decision::{Decision, Reason};
 pub use dependency::{Ecosystem, Integrity, ResolvedDependency, Source};
 pub use lockfile::{InstallguardLock, LockDecision, LockEntry, LockError, LockMismatch};
