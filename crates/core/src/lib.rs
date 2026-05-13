@@ -8,6 +8,7 @@
 
 pub mod adapter;
 pub mod attestation;
+pub mod audit;
 pub mod decision;
 pub mod dependency;
 pub mod lockfile;

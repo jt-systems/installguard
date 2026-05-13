@@ -108,6 +108,13 @@ struct EvalArgs {
     /// to `<path>/installguard.lock`.
     #[arg(long)]
     lock: Option<PathBuf>,
+
+    /// Append a JSONL audit record (one `run` row + one `decision` row
+    /// per package) to this file. Honours `$INSTALLGUARD_AUDIT_LOG`
+    /// when the flag is omitted. The file is opened append-only and
+    /// never truncated; safe to point at a long-lived per-host log.
+    #[arg(long, env = "INSTALLGUARD_AUDIT_LOG")]
+    audit_log: Option<PathBuf>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -310,13 +317,15 @@ async fn evaluate(args: &EvalArgs) -> Result<EvalOutput> {
         })
         .collect();
 
-    Ok(EvalOutput {
+    let out = EvalOutput {
         lockfile,
         lockfile_bytes,
         adapter_id: adapter.id(),
         policy,
         results,
-    })
+    };
+    maybe_write_audit(args, &out)?;
+    Ok(out)
 }
 
 /// Frozen-policy evaluation: load `installguard.lock` and emit decisions
@@ -408,13 +417,51 @@ fn evaluate_frozen(args: &EvalArgs) -> Result<EvalOutput> {
         })
         .collect();
 
-    Ok(EvalOutput {
+    let out = EvalOutput {
         lockfile: lockfile_path,
         lockfile_bytes,
         adapter_id: lock_str_to_adapter(&lock.adapter),
         policy,
         results,
-    })
+    };
+    maybe_write_audit(args, &out)?;
+    Ok(out)
+}
+
+fn maybe_write_audit(args: &EvalArgs, out: &EvalOutput) -> Result<()> {
+    use installguard_core::audit::{append, AuditEntry, AuditRun};
+    use installguard_core::lockfile::{policy_digest_hex, sha256_hex};
+
+    let Some(path) = args.audit_log.as_ref() else {
+        return Ok(());
+    };
+    let entries: Vec<AuditEntry<'_>> = out
+        .results
+        .iter()
+        .map(|r| AuditEntry {
+            dep: &r.dep,
+            decision: &r.decision,
+        })
+        .collect();
+    let lockfile_rel = out
+        .lockfile
+        .strip_prefix(&args.path)
+        .unwrap_or(&out.lockfile)
+        .to_string_lossy();
+    let policy_d = policy_digest_hex(&out.policy).context("digesting policy for audit log")?;
+    let lockfile_d = sha256_hex(&out.lockfile_bytes);
+    let run = AuditRun {
+        timestamp: chrono::Utc::now(),
+        tool_name: "installguard",
+        tool_version: env!("CARGO_PKG_VERSION"),
+        adapter: out.adapter_id,
+        lockfile: &lockfile_rel,
+        lockfile_digest: &lockfile_d,
+        policy_digest: &policy_d,
+        entries: &entries,
+    };
+    append(path, &run).with_context(|| format!("writing audit log {}", path.display()))?;
+    Ok(())
 }
 
 fn source_from_kind(kind: &str) -> installguard_core::dependency::Source {
