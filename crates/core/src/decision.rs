@@ -57,6 +57,13 @@ pub enum Reason {
         added_bins: Vec<String>,
         added_scripts: Vec<String>,
     },
+    /// The `latest` dist-tag points to a version strictly older than
+    /// the highest non-prerelease published version (“latest moved
+    /// backwards”).
+    DistTagAnomaly {
+        latest_version: String,
+        highest_published: String,
+    },
     SignalUnavailable {
         provider: String,
         reason: String,
@@ -79,6 +86,7 @@ impl Reason {
             Self::DeprecatedVersion { .. } => "deprecated-version",
             Self::SuspiciousScript { .. } => "suspicious-script",
             Self::VersionSurfaceChange { .. } => "version-surface-change",
+            Self::DistTagAnomaly { .. } => "dist-tag-anomaly",
             Self::SignalUnavailable { .. } => "signal-unavailable",
         }
     }

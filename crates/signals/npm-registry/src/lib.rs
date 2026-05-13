@@ -138,6 +138,9 @@ impl SignalProvider for NpmRegistryProvider {
         if let Some(change) = detect_version_surface_change(&body, &dep.version) {
             out.push(change);
         }
+        if let Some(anomaly) = detect_dist_tag_anomaly(&body) {
+            out.push(anomaly);
+        }
 
         Ok(out)
     }
@@ -277,6 +280,35 @@ fn bin_names(bin: Option<&serde_json::Value>) -> Vec<String> {
     }
 }
 
+/// Detects the “`latest` moved backwards” pattern: `dist-tags.latest`
+/// resolves to a version that is strictly older than the highest
+/// non-prerelease published version. Pre-releases are excluded from
+/// the “highest” comparison because shipping `2.0.0-rc.1` while
+/// `latest=1.4.0` is normal release-train behaviour, not an attack.
+/// Returns `None` when there is no `latest` tag, the tag points to
+/// an unparseable version, or the tag points at the maximum
+/// non-prerelease version (the healthy case).
+fn detect_dist_tag_anomaly(packument: &Packument) -> Option<Signal> {
+    let latest = packument.dist_tags.get("latest")?;
+    let latest_sem = Version::parse(latest).ok()?;
+
+    let max_release = packument
+        .versions
+        .keys()
+        .filter_map(|v| Version::parse(v).ok())
+        .filter(|v| v.pre.is_empty())
+        .max()?;
+
+    if latest_sem >= max_release {
+        None
+    } else {
+        Some(Signal::DistTagAnomaly {
+            latest_version: latest.clone(),
+            highest_published: max_release.to_string(),
+        })
+    }
+}
+
 fn encode_name(name: &str) -> String {
     // Scoped names need their `/` percent-encoded for the packument URL.
     name.replacen('/', "%2F", 1)
@@ -288,6 +320,10 @@ struct Packument {
     time: HashMap<String, DateTime<Utc>>,
     #[serde(default)]
     versions: HashMap<String, VersionMeta>,
+    /// Top-level `dist-tags` map, e.g. `{ "latest": "1.2.3" }`.
+    /// Used by [`detect_dist_tag_anomaly`].
+    #[serde(default, rename = "dist-tags")]
+    dist_tags: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -345,6 +381,7 @@ mod tests {
         Packument {
             time: HashMap::new(),
             versions,
+            dist_tags: HashMap::new(),
         }
     }
 
@@ -494,6 +531,7 @@ mod tests {
         Packument {
             time: HashMap::new(),
             versions,
+            dist_tags: HashMap::new(),
         }
     }
 
@@ -544,6 +582,7 @@ mod tests {
         let p = Packument {
             time: HashMap::new(),
             versions,
+            dist_tags: HashMap::new(),
         };
         assert!(detect_version_surface_change(&p, "1.0.0").is_none());
     }
@@ -583,5 +622,65 @@ mod tests {
         );
         let p = surface_pkmt(prior, current);
         assert!(detect_version_surface_change(&p, "1.0.1").is_none());
+    }
+
+    fn pkmt_with_dist_tags(versions: &[&str], dist_tags: &[(&str, &str)]) -> Packument {
+        let versions = versions
+            .iter()
+            .map(|v| {
+                (
+                    (*v).to_string(),
+                    VersionMeta {
+                        scripts: None,
+                        npm_user: None,
+                        deprecated: None,
+                        bin: None,
+                    },
+                )
+            })
+            .collect();
+        let dist_tags = dist_tags
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        Packument {
+            time: HashMap::new(),
+            versions,
+            dist_tags,
+        }
+    }
+
+    #[test]
+    fn dist_tag_anomaly_detects_latest_pointing_backwards() {
+        let p = pkmt_with_dist_tags(&["1.0.0", "1.1.0", "2.0.0"], &[("latest", "1.1.0")]);
+        match detect_dist_tag_anomaly(&p).expect("present") {
+            Signal::DistTagAnomaly {
+                latest_version,
+                highest_published,
+            } => {
+                assert_eq!(latest_version, "1.1.0");
+                assert_eq!(highest_published, "2.0.0");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dist_tag_anomaly_quiet_when_latest_is_max() {
+        let p = pkmt_with_dist_tags(&["1.0.0", "1.1.0", "2.0.0"], &[("latest", "2.0.0")]);
+        assert!(detect_dist_tag_anomaly(&p).is_none());
+    }
+
+    #[test]
+    fn dist_tag_anomaly_ignores_prereleases_in_max() {
+        // 2.0.0-rc.1 must not count as the "real" max.
+        let p = pkmt_with_dist_tags(&["1.0.0", "1.1.0", "2.0.0-rc.1"], &[("latest", "1.1.0")]);
+        assert!(detect_dist_tag_anomaly(&p).is_none());
+    }
+
+    #[test]
+    fn dist_tag_anomaly_no_latest_tag_returns_none() {
+        let p = pkmt_with_dist_tags(&["1.0.0", "2.0.0"], &[("next", "2.0.0")]);
+        assert!(detect_dist_tag_anomaly(&p).is_none());
     }
 }

@@ -188,6 +188,10 @@ impl Policy {
 
     /// Evaluate with explicit context. See [`EvalContext`].
     #[must_use]
+    #[allow(clippy::too_many_lines)] // each detector adds a small,
+                                     // independent block of pushed reasons; splitting just to satisfy
+                                     // a line-count lint would obscure the linear "collect signals →
+                                     // map to reasons → apply severity" pipeline.
     pub fn evaluate_with(
         &self,
         dep: &ResolvedDependency,
@@ -277,7 +281,18 @@ impl Policy {
                     });
                 }
             }
-        } // ── Surface unavailability so it isn't silently swallowed ───────
+        }
+        // ── Dist-tag anomaly ────────────────────────────────────────────
+        // Always-on: "latest moved backwards" is never a normal
+        // operation and the signal is purely structural. Default
+        // severity `block`; demote with `severity.dist-tag-anomaly: warn`.
+        if let Some((latest, highest)) = signals.dist_tag_anomaly() {
+            reasons.push(Reason::DistTagAnomaly {
+                latest_version: latest.to_string(),
+                highest_published: highest.to_string(),
+            });
+        }
+        // ── Surface unavailability so it isn't silently swallowed ───────
         for sig in &signals.signals {
             if let crate::signal::Signal::Unavailable { provider, reason } = sig {
                 reasons.push(Reason::SignalUnavailable {
@@ -973,5 +988,44 @@ mod tests {
             Utc::now(),
         );
         assert!(matches!(transitive, Decision::Allow));
+    }
+
+    #[test]
+    fn dist_tag_anomaly_blocks_by_default() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::DistTagAnomaly {
+            latest_version: "1.1.0".into(),
+            highest_published: "2.0.0".into(),
+        });
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        match d {
+            Decision::Block { reasons } => {
+                assert_eq!(reasons.len(), 1);
+                assert_eq!(reasons[0].code(), "dist-tag-anomaly");
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dist_tag_anomaly_demotable_to_warn() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\nseverity:\n  dist-tag-anomaly: warn\n").unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::DistTagAnomaly {
+            latest_version: "1.1.0".into(),
+            highest_published: "2.0.0".into(),
+        });
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Warn { .. }), "got {d:?}");
     }
 }

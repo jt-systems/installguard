@@ -222,6 +222,12 @@ fn summarise(r: &Reason) -> String {
             }
             format!("version-surface change vs {previous_version} — {}", parts.join("; "))
         }
+        Reason::DistTagAnomaly {
+            latest_version,
+            highest_published,
+        } => format!(
+            "dist-tag `latest` points to {latest_version} but {highest_published} is published — latest moved backwards"
+        ),
         Reason::SignalUnavailable { provider, reason } => {
             format!("signal provider `{provider}` unavailable: {reason}")
         }

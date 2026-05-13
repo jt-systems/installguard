@@ -53,6 +53,17 @@ pub enum Signal {
         added_bins: Vec<String>,
         added_scripts: Vec<String>,
     },
+    /// The `latest` dist-tag points to a version that is strictly
+    /// older than the highest non-prerelease published version.
+    /// This is the “latest moved backwards” pattern — a classic
+    /// way to silently ship a malicious patch-only version while
+    /// hiding it from `npm outdated`. `latest_version` is what
+    /// `dist-tags.latest` resolves to; `highest_published` is the
+    /// real maximum.
+    DistTagAnomaly {
+        latest_version: String,
+        highest_published: String,
+    },
     /// The provider could not produce signals for this dependency. Always
     /// recorded so policy can decide how to treat unknowns.
     Unavailable { provider: String, reason: String },
@@ -137,6 +148,19 @@ impl SignalSet {
                 added_bins.as_slice(),
                 added_scripts.as_slice(),
             )),
+            _ => None,
+        })
+    }
+
+    /// Returns the dist-tag anomaly signal if one was recorded.
+    /// Tuple is `(latest_version, highest_published)`.
+    #[must_use]
+    pub fn dist_tag_anomaly(&self) -> Option<(&str, &str)> {
+        self.signals.iter().find_map(|s| match s {
+            Signal::DistTagAnomaly {
+                latest_version,
+                highest_published,
+            } => Some((latest_version.as_str(), highest_published.as_str())),
             _ => None,
         })
     }

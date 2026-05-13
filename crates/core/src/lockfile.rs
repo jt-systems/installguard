@@ -261,6 +261,7 @@ fn signal_kind(s: &Signal) -> String {
         Signal::DeprecatedVersion { .. } => "deprecated_version",
         Signal::SuspiciousScript { .. } => "suspicious_script",
         Signal::VersionSurfaceChange { .. } => "version_surface_change",
+        Signal::DistTagAnomaly { .. } => "dist_tag_anomaly",
         Signal::Unavailable { .. } => "unavailable",
     }
     .to_string()
