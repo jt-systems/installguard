@@ -64,6 +64,27 @@ enum Command {
     /// to a VEX statement. Block becomes `affected`, warn becomes
     /// `under_investigation`; allow decisions emit no statement.
     Vex(VexArgs),
+    /// Generate or inspect Sigstore-compatible Ed25519 keypairs.
+    #[command(subcommand)]
+    Key(KeyCommand),
+    /// Sign an arbitrary payload (typically a previously-emitted
+    /// `installguard.intoto.json`) with an Ed25519 PKCS#8-PEM key,
+    /// producing a DSSE v1 envelope that `cosign verify-blob` can
+    /// validate.
+    Sign(SignArgs),
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum KeyCommand {
+    /// Generate a fresh Ed25519 keypair as PKCS#8 PEM files. Defaults
+    /// to `cosign.key` / `cosign.pub` so cosign can pick them up by
+    /// convention.
+    Generate {
+        #[arg(long, default_value = "cosign.key")]
+        priv_out: PathBuf,
+        #[arg(long, default_value = "cosign.pub")]
+        pub_out: PathBuf,
+    },
 }
 
 /// Inputs shared by `scan` and `ci`.
@@ -165,6 +186,40 @@ struct VerifyArgs {
     /// Path to the existing lock file. Defaults to `<path>/installguard.lock`.
     #[arg(long)]
     against: Option<PathBuf>,
+
+    /// DSSE-signed bundle (the output of `installguard sign`) to
+    /// verify. When set, signature verification is performed against
+    /// `--key` and the wrapped in-toto predicate is checked against
+    /// the project's current lockfile + policy digests. Skips the
+    /// `installguard.lock` round-trip.
+    #[arg(long)]
+    bundle: Option<PathBuf>,
+
+    /// Public key (Ed25519 PKCS#8 PEM, the cosign.pub format) used to
+    /// verify `--bundle`. Required when `--bundle` is set.
+    #[arg(long)]
+    key: Option<PathBuf>,
+}
+
+#[derive(Debug, clap::Args)]
+struct SignArgs {
+    /// Payload to sign. Use `-` to read from stdin.
+    #[arg(value_name = "PAYLOAD")]
+    input: PathBuf,
+
+    /// Ed25519 PKCS#8-PEM private key. Defaults to `cosign.key`.
+    #[arg(long, default_value = "cosign.key", env = "COSIGN_KEY")]
+    key: PathBuf,
+
+    /// DSSE payloadType. Defaults to `application/vnd.in-toto+json`,
+    /// matching cosign's attestation default.
+    #[arg(long, default_value = "application/vnd.in-toto+json")]
+    payload_type: String,
+
+    /// Output path for the DSSE envelope. Defaults to
+    /// `<input>.sig.json`. Use `-` to write to stdout.
+    #[arg(long)]
+    out: Option<PathBuf>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -236,6 +291,10 @@ async fn main() -> ExitCode {
         Command::Attest(args) => run_attest(args).await,
         Command::Sbom(args) => run_sbom(args).await,
         Command::Vex(args) => run_vex(args).await,
+        Command::Key(KeyCommand::Generate { priv_out, pub_out }) => {
+            run_key_generate(&priv_out, &pub_out)
+        }
+        Command::Sign(args) => run_sign(args),
     };
     match result {
         Ok(code) => code,
@@ -753,8 +812,68 @@ async fn run_vex(args: VexArgs) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+// ── `key` / `sign` subcommands ──────────────────────────────────────────────
+
+fn run_key_generate(priv_out: &std::path::Path, pub_out: &std::path::Path) -> Result<ExitCode> {
+    installguard_core::dsse::generate_keypair(priv_out, pub_out).with_context(|| {
+        format!(
+            "generating keypair {} / {}",
+            priv_out.display(),
+            pub_out.display()
+        )
+    })?;
+    eprintln!(
+        "wrote keypair: {} (private), {} (public)",
+        priv_out.display(),
+        pub_out.display()
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_sign(args: SignArgs) -> Result<ExitCode> {
+    use std::io::Read;
+
+    let payload = if args.input.as_os_str() == "-" {
+        let mut buf = Vec::new();
+        std::io::stdin().read_to_end(&mut buf)?;
+        buf
+    } else {
+        std::fs::read(&args.input).with_context(|| format!("reading {}", args.input.display()))?
+    };
+    let envelope = installguard_core::dsse::sign(&payload, &args.payload_type, &args.key)
+        .with_context(|| format!("signing with {}", args.key.display()))?;
+    let mut json = serde_json::to_string_pretty(&envelope).context("serialising envelope")?;
+    json.push('\n');
+
+    let dest = args.out.unwrap_or_else(|| {
+        let mut p = args.input.clone();
+        let ext = p.extension().map_or_else(
+            || "sig.json".to_string(),
+            |e| format!("{}.sig.json", e.to_string_lossy()),
+        );
+        p.set_extension(ext);
+        p
+    });
+    if dest.as_os_str() == "-" {
+        print!("{json}");
+    } else {
+        std::fs::write(&dest, &json)
+            .with_context(|| format!("writing envelope {}", dest.display()))?;
+        eprintln!(
+            "wrote {} (DSSE v1, payloadType {}, keyid {}\u{2026})",
+            dest.display(),
+            envelope.payload_type,
+            envelope.signatures[0].keyid.get(..12).unwrap_or(""),
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 // ── `verify` subcommand ─────────────────────────────────────────────────────
 async fn run_verify(args: VerifyArgs) -> Result<ExitCode> {
+    if let Some(bundle) = args.bundle.as_ref() {
+        return run_verify_bundle(&args, bundle);
+    }
     let lock_path = args
         .against
         .clone()
@@ -783,6 +902,88 @@ async fn run_verify(args: VerifyArgs) -> Result<ExitCode> {
             }
             Ok(ExitCode::from(1))
         }
+    }
+}
+
+/// Verify a DSSE-signed in-toto Statement bundle. Checks:
+///   1. Signature is valid under `--key`.
+///   2. payloadType is the in-toto JSON type cosign uses.
+///   3. The wrapped predicate's `lockfile_digest` matches the project's
+///      current lockfile bytes (re-hashed) and the predicate's
+///      `policy_digest` matches the current policy file. Otherwise the
+///      bundle is genuine but no longer current; exit 1.
+fn run_verify_bundle(args: &VerifyArgs, bundle_path: &std::path::Path) -> Result<ExitCode> {
+    use installguard_core::attestation::{Statement, PREDICATE_TYPE};
+    use installguard_core::dsse::{verify, DsseEnvelope, INTOTO_PAYLOAD_TYPE};
+    use installguard_core::lockfile::{policy_digest_hex, sha256_hex};
+
+    let key = args.key.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("--bundle requires --key (Ed25519 PKCS#8 PEM public key)")
+    })?;
+
+    let raw = std::fs::read_to_string(bundle_path)
+        .with_context(|| format!("reading bundle {}", bundle_path.display()))?;
+    let envelope: DsseEnvelope = serde_json::from_str(&raw).context("parsing DSSE envelope")?;
+    let payload = verify(&envelope, key, Some(INTOTO_PAYLOAD_TYPE), None)
+        .with_context(|| format!("verifying signature with {}", key.display()))?;
+
+    let statement: Statement =
+        serde_json::from_slice(&payload).context("parsing in-toto statement payload")?;
+    if statement.predicate_type != PREDICATE_TYPE {
+        anyhow::bail!(
+            "bundle predicateType {} does not match {PREDICATE_TYPE}",
+            statement.predicate_type
+        );
+    }
+
+    // Cross-check predicate against current project state.
+    let lock = &statement.predicate;
+    let lockfile_path = args.common.path.join(&lock.lockfile);
+    let lockfile_bytes = std::fs::read(&lockfile_path)
+        .with_context(|| format!("reading {}", lockfile_path.display()))?;
+    let cur_lockfile_digest = sha256_hex(&lockfile_bytes);
+    let policy_path = args
+        .common
+        .policy
+        .clone()
+        .unwrap_or_else(|| args.common.path.join("installguard.yaml"));
+    let policy = if policy_path.exists() {
+        installguard_core::policy::Policy::from_path(&policy_path)
+            .with_context(|| format!("loading policy {}", policy_path.display()))?
+    } else {
+        installguard_core::policy::Policy::default()
+    };
+    let cur_policy_digest = policy_digest_hex(&policy).context("digesting policy")?;
+
+    let mut diffs = Vec::new();
+    if cur_lockfile_digest != lock.lockfile_digest {
+        diffs.push(format!(
+            "lockfile drift: bundle recorded {}, found {}",
+            short(&lock.lockfile_digest),
+            short(&cur_lockfile_digest)
+        ));
+    }
+    if cur_policy_digest != lock.policy_digest {
+        diffs.push(format!(
+            "policy drift: bundle recorded {}, found {}",
+            short(&lock.policy_digest),
+            short(&cur_policy_digest)
+        ));
+    }
+
+    if diffs.is_empty() {
+        eprintln!(
+            "OK  bundle signature valid + predicate matches project ({} packages, lockfile {})",
+            lock.summary.total,
+            short(&lock.lockfile_digest)
+        );
+        Ok(ExitCode::SUCCESS)
+    } else {
+        eprintln!("DRIFT bundle is signed and authentic but no longer current:");
+        for d in &diffs {
+            eprintln!("  - {d}");
+        }
+        Ok(ExitCode::from(1))
     }
 }
 

@@ -11,6 +11,7 @@ pub mod attestation;
 pub mod audit;
 pub mod decision;
 pub mod dependency;
+pub mod dsse;
 pub mod lockfile;
 pub mod policy;
 pub mod sbom;

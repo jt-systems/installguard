@@ -45,6 +45,9 @@ async-trait = "0.1"
 schemars = { version = "0.8", features = ["chrono"] }
 sha2 = "0.10"
 hex = "0.4"
+base64 = "0.22"
+ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "pkcs8", "rand_core", "pem"] }
+rand = "0.8"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -49,8 +49,8 @@ Make decisions reproducible and provable.
 - ☑ `installguard.lock` writer/reader with stable, deterministic JSON
 - ☑ `--frozen-policy` mode (re-verify offline against a recorded snapshot)
 - ☑ in-toto v1 attestation predicate `policy-evaluation/v1`
-- ☐ Sigstore signing (cosign keyless and KMS)
-- ◐ `installguard verify` against a signed attestation _(unsigned-lock verify shipped; signed-attestation path depends on Sigstore wiring)_
+- ◐ Sigstore signing (cosign keyless and KMS) _(DSSE v1 keyfile signing shipped — `installguard key generate` / `sign`, cosign-compatible Ed25519 PKCS#8 PEM; keyless Fulcio/Rekor flow still pending)_
+- ☑ `installguard verify` against a signed attestation _(`verify --bundle <env> --key <pub.pem>` checks DSSE signature, in-toto payloadType, and re-binds the wrapped predicate to the live lockfile + policy digests)_
 - ☑ CycloneDX SBOM export with policy-decision properties
 - ☑ VEX statement export per package decision
 - ☑ Audit log sink (JSONL) with stable schema
