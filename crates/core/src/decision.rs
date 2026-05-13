@@ -72,6 +72,14 @@ pub enum Reason {
         style: String,
         target: String,
     },
+    /// The npm account that published this version was created
+    /// fewer than the configured threshold days before the
+    /// version's publish time — a strong account-takeover signal.
+    MaintainerNewAccount {
+        account: String,
+        age_days: u32,
+        threshold_days: u32,
+    },
     SignalUnavailable {
         provider: String,
         reason: String,
@@ -96,6 +104,7 @@ impl Reason {
             Self::VersionSurfaceChange { .. } => "version-surface-change",
             Self::DistTagAnomaly { .. } => "dist-tag-anomaly",
             Self::NameSquat { .. } => "name-squat",
+            Self::MaintainerNewAccount { .. } => "maintainer-new-account",
             Self::SignalUnavailable { .. } => "signal-unavailable",
         }
     }

@@ -65,8 +65,8 @@ Move beyond age into the multi-signal model from the whitepaper §7.
 
 - ☑ Publisher-change detection (`vN` vs `vN-1` maintainers)
 - ☑ Deprecated-version detection (registry-side post-publish trust signal; pairs with publisher-change)
-- ☐ Maintainer 2FA status check
-- ☐ Maintainer account-age check
+- ☐ Maintainer 2FA status check (deferred — public registry does not expose 2FA status to unauthenticated callers; revisit with paid data source or scoped npm token)
+- ☑ Maintainer account-age check
 - ☑ Dist-tag churn detection
 - ☑ File-set diff between versions (new `bin`, `.node`, `.wasm`, postinstall)
 - ☑ Static analysis of install scripts (high-risk patterns: `curl|sh`, base64 `eval`, env-var exfil to non-registry hosts)

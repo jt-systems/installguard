@@ -231,6 +231,13 @@ fn summarise(r: &Reason) -> String {
         Reason::NameSquat { style, target } => {
             format!("package name resembles `{target}` ({style}) — possible typosquat")
         }
+        Reason::MaintainerNewAccount {
+            account,
+            age_days,
+            threshold_days,
+        } => format!(
+            "publisher account `{account}` is {age_days}d old (< {threshold_days}d threshold)"
+        ),
         Reason::SignalUnavailable { provider, reason } => {
             format!("signal provider `{provider}` unavailable: {reason}")
         }

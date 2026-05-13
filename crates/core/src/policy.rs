@@ -83,6 +83,13 @@ pub struct Defaults {
     /// `direct.detectVersionSurfaceChange: true`.
     #[serde(default)]
     pub detect_version_surface_change: bool,
+    /// Block versions whose publisher account is younger than this
+    /// many days at the time of publication. `0` disables the check.
+    /// Account-takeover attacks frequently use freshly-created burner
+    /// accounts; a 30- to 60-day floor catches them without
+    /// flagging legitimate new maintainers in steady-state projects.
+    #[serde(default)]
+    pub min_maintainer_account_age_days: u32,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
@@ -97,6 +104,9 @@ pub struct DirectOverrides {
     /// Per-direct-dep override for
     /// [`Defaults::detect_version_surface_change`].
     pub detect_version_surface_change: Option<bool>,
+    /// Per-direct-dep override for
+    /// [`Defaults::min_maintainer_account_age_days`].
+    pub min_maintainer_account_age_days: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -303,6 +313,23 @@ impl Policy {
                 target: target.to_string(),
             });
         }
+        // ── Maintainer new account ──────────────────────────────────────
+        // Threshold-based, opt-in. The provider only emits the signal
+        // when it knows the age; the policy decides whether the age is
+        // too young for the configured threshold. Threshold = 0 (the
+        // default) disables the check entirely.
+        let threshold_days = self.min_maintainer_account_age_days_for(dep);
+        if threshold_days > 0 {
+            if let Some((account, age_days)) = signals.maintainer_new_account() {
+                if age_days < threshold_days {
+                    reasons.push(Reason::MaintainerNewAccount {
+                        account: account.to_string(),
+                        age_days,
+                        threshold_days,
+                    });
+                }
+            }
+        }
         // ── Surface unavailability so it isn't silently swallowed ───────
         for sig in &signals.signals {
             if let crate::signal::Signal::Unavailable { provider, reason } = sig {
@@ -392,6 +419,16 @@ impl Policy {
                 .unwrap_or(self.defaults.detect_version_surface_change)
         } else {
             self.defaults.detect_version_surface_change
+        }
+    }
+
+    fn min_maintainer_account_age_days_for(&self, dep: &ResolvedDependency) -> u32 {
+        if dep.direct {
+            self.direct
+                .min_maintainer_account_age_days
+                .unwrap_or(self.defaults.min_maintainer_account_age_days)
+        } else {
+            self.defaults.min_maintainer_account_age_days
         }
     }
 
@@ -1076,5 +1113,63 @@ mod tests {
             Utc::now(),
         );
         assert!(matches!(d, Decision::Warn { .. }), "got {d:?}");
+    }
+
+    #[test]
+    fn maintainer_new_account_off_when_threshold_zero() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::MaintainerNewAccount {
+            account: "alice".into(),
+            age_days: 1,
+        });
+        let d = p.evaluate(
+            &dep("foo", true, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Allow), "got {d:?}");
+    }
+
+    #[test]
+    fn maintainer_new_account_blocks_below_threshold() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\ndefaults:\n  minMaintainerAccountAgeDays: 30\n")
+                .unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::MaintainerNewAccount {
+            account: "alice".into(),
+            age_days: 7,
+        });
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        match d {
+            Decision::Block { reasons } => {
+                assert_eq!(reasons.len(), 1);
+                assert_eq!(reasons[0].code(), "maintainer-new-account");
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maintainer_new_account_quiet_above_threshold() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\ndefaults:\n  minMaintainerAccountAgeDays: 30\n")
+                .unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::MaintainerNewAccount {
+            account: "alice".into(),
+            age_days: 365,
+        });
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Allow), "got {d:?}");
     }
 }

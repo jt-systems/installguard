@@ -72,6 +72,13 @@ pub enum Signal {
     /// is the popular name it resembles. See
     /// [`crate::name_similarity`].
     NameSquat { style: String, target: String },
+    /// The npm account that published this version was itself
+    /// created very recently — a strong signal of an
+    /// account-takeover or a fresh-throwaway publisher. Carries
+    /// the account name and the integer day-difference between
+    /// account creation and version publication; the policy layer
+    /// decides whether `age_days < threshold_days` is actionable.
+    MaintainerNewAccount { account: String, age_days: u32 },
     /// The provider could not produce signals for this dependency. Always
     /// recorded so policy can decide how to treat unknowns.
     Unavailable { provider: String, reason: String },
@@ -179,6 +186,18 @@ impl SignalSet {
     pub fn name_squat(&self) -> Option<(&str, &str)> {
         self.signals.iter().find_map(|s| match s {
             Signal::NameSquat { style, target } => Some((style.as_str(), target.as_str())),
+            _ => None,
+        })
+    }
+
+    /// Returns the maintainer-new-account signal if one was recorded.
+    /// Tuple is `(account, age_days)`.
+    #[must_use]
+    pub fn maintainer_new_account(&self) -> Option<(&str, u32)> {
+        self.signals.iter().find_map(|s| match s {
+            Signal::MaintainerNewAccount { account, age_days } => {
+                Some((account.as_str(), *age_days))
+            }
             _ => None,
         })
     }

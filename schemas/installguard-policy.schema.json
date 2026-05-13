@@ -25,6 +25,13 @@
           "description": "Emit a [`Reason::DeprecatedVersion`] when the registry reports the resolved version as deprecated. Default severity is `block`; many projects will want `severity.deprecated-version: warn` during a clean-up rollout.",
           "type": "boolean"
         },
+        "minMaintainerAccountAgeDays": {
+          "default": 0,
+          "description": "Block versions whose publisher account is younger than this many days at the time of publication. `0` disables the check. Account-takeover attacks frequently use freshly-created burner accounts; a 30- to 60-day floor catches them without flagging legitimate new maintainers in steady-state projects.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "minimumReleaseAge": {
           "default": null,
           "description": "Minimum release age in minutes. `0` disables the check.",
@@ -61,6 +68,16 @@
           "description": "Per-direct-dep override for [`Defaults::flag_deprecated`].",
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "minMaintainerAccountAgeDays": {
+          "default": null,
+          "description": "Per-direct-dep override for [`Defaults::min_maintainer_account_age_days`].",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
             "null"
           ]
         },
@@ -126,6 +143,7 @@
         "detectPublisherChange": false,
         "detectVersionSurfaceChange": false,
         "flagDeprecated": false,
+        "minMaintainerAccountAgeDays": 0,
         "minimumReleaseAge": null
       }
     },
@@ -139,6 +157,7 @@
         "detectPublisherChange": null,
         "detectVersionSurfaceChange": null,
         "flagDeprecated": null,
+        "minMaintainerAccountAgeDays": null,
         "minimumReleaseAge": null
       }
     },

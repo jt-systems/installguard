@@ -263,6 +263,7 @@ fn signal_kind(s: &Signal) -> String {
         Signal::VersionSurfaceChange { .. } => "version_surface_change",
         Signal::DistTagAnomaly { .. } => "dist_tag_anomaly",
         Signal::NameSquat { .. } => "name_squat",
+        Signal::MaintainerNewAccount { .. } => "maintainer_new_account",
         Signal::Unavailable { .. } => "unavailable",
     }
     .to_string()

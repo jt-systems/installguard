@@ -16,6 +16,7 @@ use installguard_core::signal::{Signal, SignalError, SignalProvider};
 use semver::Version;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 const DEFAULT_REGISTRY: &str = "https://registry.npmjs.org";
 const USER_AGENT: &str = concat!("installguard/", env!("CARGO_PKG_VERSION"));
@@ -35,6 +36,14 @@ const LIFECYCLE_SCRIPTS: &[&str] = &[
 pub struct NpmRegistryProvider {
     client: reqwest::Client,
     registry: String,
+    /// Per-instance, in-memory cache of npm user records. Keyed by
+    /// account name. `Some(created)` means we've successfully
+    /// fetched the user record; `None` means we tried and failed
+    /// (404, network error, malformed body) and don't want to keep
+    /// retrying for the duration of this run. The underlying
+    /// [`Mutex`] is held only across map mutations — never across
+    /// the network call.
+    user_cache: Mutex<HashMap<String, Option<DateTime<Utc>>>>,
 }
 
 impl NpmRegistryProvider {
@@ -50,6 +59,7 @@ impl NpmRegistryProvider {
         Ok(Self {
             client,
             registry: registry.into().trim_end_matches('/').to_string(),
+            user_cache: Mutex::new(HashMap::new()),
         })
     }
 }
@@ -155,8 +165,116 @@ impl SignalProvider for NpmRegistryProvider {
             out.push(anomaly);
         }
 
+        // Maintainer account age: only fetch the user record when we
+        // actually know the publisher AND we know the publish time;
+        // pure-helper logic is unit-tested separately.
+        if let Some(version_meta) = body.versions.get(&dep.version) {
+            if let Some(account) = version_meta.npm_user.as_ref().map(|u| u.name.clone()) {
+                if let Some(published_at) = body.time.get(&dep.version).copied() {
+                    let created = self.fetch_user_created(&account).await;
+                    if let Some(sig) =
+                        compute_maintainer_account_signal(&account, created, published_at)
+                    {
+                        out.push(sig);
+                    }
+                }
+            }
+        }
+
         Ok(out)
     }
+}
+
+impl NpmRegistryProvider {
+    /// Fetches the npm user record at
+    /// `/-/user/org.couchdb.user:<name>` and returns the `created`
+    /// timestamp. Memoised in `self.user_cache` for the lifetime
+    /// of this provider instance — npm user records are stable
+    /// enough that re-fetching during a single scan would only add
+    /// latency. Returns `None` on any failure (404, network,
+    /// decode); the cache stores the failure too so we don't retry.
+    async fn fetch_user_created(&self, name: &str) -> Option<DateTime<Utc>> {
+        if let Ok(cache) = self.user_cache.lock() {
+            if let Some(hit) = cache.get(name) {
+                return *hit;
+            }
+        }
+        let url = format!(
+            "{}/-/user/org.couchdb.user:{}",
+            self.registry,
+            urlencoding(name)
+        );
+        tracing::debug!(url, "fetching npm user record");
+        let result: Option<DateTime<Utc>> = async {
+            let resp = self
+                .client
+                .get(&url)
+                .header(reqwest::header::ACCEPT, "application/json")
+                .send()
+                .await
+                .ok()?;
+            if !resp.status().is_success() {
+                return None;
+            }
+            let body: NpmUserRecord = resp.json().await.ok()?;
+            body.created
+        }
+        .await;
+        if let Ok(mut cache) = self.user_cache.lock() {
+            cache.insert(name.to_string(), result);
+        }
+        result
+    }
+}
+
+/// Minimal percent-encoder for the user-record path component. The
+/// CouchDB key form is `org.couchdb.user:<name>`; npm usernames
+/// are restricted to URL-safe ASCII so this is essentially a
+/// passthrough, but we encode `:` defensively just in case.
+fn urlencoding(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            other => format!("%{:02X}", other as u32),
+        })
+        .collect()
+}
+
+#[derive(Debug, Deserialize)]
+struct NpmUserRecord {
+    /// User-record creation timestamp. Field shape varies across
+    /// registry mirrors — we accept the canonical ISO-8601 string
+    /// form and treat anything else as `None`.
+    #[serde(default)]
+    created: Option<DateTime<Utc>>,
+}
+
+/// Pure decision: given an account name, the account's optional
+/// creation time, and the version's publish time, returns a
+/// [`Signal::MaintainerNewAccount`] iff the account was created at
+/// or before the publish time AND the absolute age in days fits in
+/// `u32`. When `created` is `None` (we never resolved the user)
+/// or the timestamps are inverted, returns `None` — we never
+/// fabricate evidence.
+#[must_use]
+pub fn compute_maintainer_account_signal(
+    account: &str,
+    created: Option<DateTime<Utc>>,
+    published_at: DateTime<Utc>,
+) -> Option<Signal> {
+    let created = created?;
+    if created > published_at {
+        return None;
+    }
+    let age_days = (published_at - created).num_days();
+    if age_days < 0 {
+        return None;
+    }
+    let age_days = u32::try_from(age_days).ok()?;
+    Some(Signal::MaintainerNewAccount {
+        account: account.to_string(),
+        age_days,
+    })
 }
 
 /// Builds a `DeprecatedVersion` signal from a packument version entry.
@@ -695,5 +813,48 @@ mod tests {
     fn dist_tag_anomaly_no_latest_tag_returns_none() {
         let p = pkmt_with_dist_tags(&["1.0.0", "2.0.0"], &[("next", "2.0.0")]);
         assert!(detect_dist_tag_anomaly(&p).is_none());
+    }
+
+    #[test]
+    fn maintainer_account_signal_emitted_with_age() {
+        let created = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let published = chrono::DateTime::parse_from_rfc3339("2024-01-11T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        match compute_maintainer_account_signal("alice", Some(created), published).unwrap() {
+            Signal::MaintainerNewAccount { account, age_days } => {
+                assert_eq!(account, "alice");
+                assert_eq!(age_days, 10);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn maintainer_account_signal_none_without_created() {
+        let published = Utc::now();
+        assert!(compute_maintainer_account_signal("ghost", None, published).is_none());
+    }
+
+    #[test]
+    fn maintainer_account_signal_none_when_created_after_publish() {
+        // Future-dated `created` (clock skew, mirror inconsistency) —
+        // never fabricate negative ages.
+        let created = chrono::DateTime::parse_from_rfc3339("2024-02-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let published = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(compute_maintainer_account_signal("alice", Some(created), published).is_none());
+    }
+
+    #[test]
+    fn urlencoding_is_passthrough_for_npm_safe_names() {
+        assert_eq!(urlencoding("alice"), "alice");
+        assert_eq!(urlencoding("alice.bob"), "alice.bob");
+        assert_eq!(urlencoding("a:b"), "a%3Ab");
     }
 }
