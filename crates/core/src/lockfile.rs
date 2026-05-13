@@ -260,6 +260,7 @@ fn signal_kind(s: &Signal) -> String {
         Signal::PublisherChange { .. } => "publisher_change",
         Signal::DeprecatedVersion { .. } => "deprecated_version",
         Signal::SuspiciousScript { .. } => "suspicious_script",
+        Signal::VersionSurfaceChange { .. } => "version_surface_change",
         Signal::Unavailable { .. } => "unavailable",
     }
     .to_string()

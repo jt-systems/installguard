@@ -41,6 +41,18 @@ pub enum Signal {
         pattern: String,
         excerpt: String,
     },
+    /// New executable / lifecycle entry-points appeared between the
+    /// immediately-prior released version and the resolved version
+    /// (`bin` map keys and lifecycle-script names). Captures the
+    /// post-takeover “new postinstall in a patch release” pattern
+    /// without requiring tarball download. `previous_version` is the
+    /// highest released version strictly less than the resolved
+    /// version under semver.
+    VersionSurfaceChange {
+        previous_version: String,
+        added_bins: Vec<String>,
+        added_scripts: Vec<String>,
+    },
     /// The provider could not produce signals for this dependency. Always
     /// recorded so policy can decide how to treat unknowns.
     Unavailable { provider: String, reason: String },
@@ -107,6 +119,24 @@ impl SignalSet {
                 pattern,
                 excerpt,
             } => Some((script.as_str(), pattern.as_str(), excerpt.as_str())),
+            _ => None,
+        })
+    }
+
+    /// Returns the version-surface-change signal if one was recorded.
+    /// Tuple is `(previous_version, added_bins, added_scripts)`.
+    #[must_use]
+    pub fn version_surface_change(&self) -> Option<(&str, &[String], &[String])> {
+        self.signals.iter().find_map(|s| match s {
+            Signal::VersionSurfaceChange {
+                previous_version,
+                added_bins,
+                added_scripts,
+            } => Some((
+                previous_version.as_str(),
+                added_bins.as_slice(),
+                added_scripts.as_slice(),
+            )),
             _ => None,
         })
     }

@@ -48,6 +48,15 @@ pub enum Reason {
         pattern: String,
         excerpt: String,
     },
+    /// New executable / lifecycle entry-points appeared between the
+    /// immediately-prior released version and the resolved version.
+    /// Carries the prior version and the names that are new so audit
+    /// logs and `verify` can investigate without re-fetching.
+    VersionSurfaceChange {
+        previous_version: String,
+        added_bins: Vec<String>,
+        added_scripts: Vec<String>,
+    },
     SignalUnavailable {
         provider: String,
         reason: String,
@@ -69,6 +78,7 @@ impl Reason {
             Self::PublisherChange { .. } => "publisher-change",
             Self::DeprecatedVersion { .. } => "deprecated-version",
             Self::SuspiciousScript { .. } => "suspicious-script",
+            Self::VersionSurfaceChange { .. } => "version-surface-change",
             Self::SignalUnavailable { .. } => "signal-unavailable",
         }
     }

@@ -205,6 +205,23 @@ fn summarise(r: &Reason) -> String {
             pattern,
             excerpt,
         } => format!("lifecycle script `{script}` matched `{pattern}`: {excerpt}"),
+        Reason::VersionSurfaceChange {
+            previous_version,
+            added_bins,
+            added_scripts,
+        } => {
+            let mut parts: Vec<String> = Vec::new();
+            if !added_bins.is_empty() {
+                parts.push(format!("new bin entries: {}", added_bins.join(", ")));
+            }
+            if !added_scripts.is_empty() {
+                parts.push(format!(
+                    "new lifecycle scripts: {}",
+                    added_scripts.join(", ")
+                ));
+            }
+            format!("version-surface change vs {previous_version} — {}", parts.join("; "))
+        }
         Reason::SignalUnavailable { provider, reason } => {
             format!("signal provider `{provider}` unavailable: {reason}")
         }

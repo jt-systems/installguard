@@ -135,6 +135,9 @@ impl SignalProvider for NpmRegistryProvider {
         if let Some(change) = detect_publisher_change(&body, &dep.version) {
             out.push(change);
         }
+        if let Some(change) = detect_version_surface_change(&body, &dep.version) {
+            out.push(change);
+        }
 
         Ok(out)
     }
@@ -193,6 +196,87 @@ fn detect_publisher_change(packument: &Packument, current_version: &str) -> Opti
     }
 }
 
+/// Detects new `bin` entries and new lifecycle-script names introduced
+/// between the immediately-prior released version and the resolved
+/// version. Returns `None` if either version is unparseable, no prior
+/// version exists, or nothing was added (we never emit an empty
+/// signal). Removed entries are intentionally ignored — removals
+/// don’t expand attack surface.
+fn detect_version_surface_change(packument: &Packument, current_version: &str) -> Option<Signal> {
+    let current_sem = Version::parse(current_version).ok()?;
+    let current = packument.versions.get(current_version)?;
+
+    let prev = packument
+        .versions
+        .iter()
+        .filter_map(|(v, meta)| {
+            let parsed = Version::parse(v).ok()?;
+            if parsed >= current_sem {
+                return None;
+            }
+            Some((parsed, v.as_str(), meta))
+        })
+        .max_by(|a, b| a.0.cmp(&b.0))?;
+
+    let prev_bins: std::collections::BTreeSet<String> =
+        bin_names(prev.2.bin.as_ref()).into_iter().collect();
+    let cur_bins: std::collections::BTreeSet<String> =
+        bin_names(current.bin.as_ref()).into_iter().collect();
+    let mut added_bins: Vec<String> = cur_bins.difference(&prev_bins).cloned().collect();
+    added_bins.sort();
+
+    let prev_scripts: std::collections::BTreeSet<&str> = prev
+        .2
+        .scripts
+        .as_ref()
+        .map(|m| {
+            m.keys()
+                .map(String::as_str)
+                .filter(|k| LIFECYCLE_SCRIPTS.contains(k))
+                .collect()
+        })
+        .unwrap_or_default();
+    let cur_scripts: std::collections::BTreeSet<&str> = current
+        .scripts
+        .as_ref()
+        .map(|m| {
+            m.keys()
+                .map(String::as_str)
+                .filter(|k| LIFECYCLE_SCRIPTS.contains(k))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut added_scripts: Vec<String> = cur_scripts
+        .difference(&prev_scripts)
+        .map(|s| (*s).to_string())
+        .collect();
+    added_scripts.sort();
+
+    if added_bins.is_empty() && added_scripts.is_empty() {
+        return None;
+    }
+    Some(Signal::VersionSurfaceChange {
+        previous_version: prev.1.to_string(),
+        added_bins,
+        added_scripts,
+    })
+}
+
+/// Normalises npm’s polymorphic `bin` field into a list of bin
+/// *names*. The package.json schema allows either a map
+/// `{name: path}` or a single string path; in the latter case there
+/// is exactly one implicit bin and we use the sentinel
+/// `"<single>"` so both sides of a diff see the same name. We only
+/// ever compare names within the same package, so the sentinel is
+/// safe and avoids leaking the package name through the API.
+fn bin_names(bin: Option<&serde_json::Value>) -> Vec<String> {
+    match bin {
+        Some(serde_json::Value::String(_)) => vec!["<single>".to_string()],
+        Some(serde_json::Value::Object(map)) => map.keys().cloned().collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn encode_name(name: &str) -> String {
     // Scoped names need their `/` percent-encoded for the packument URL.
     name.replacen('/', "%2F", 1)
@@ -219,6 +303,11 @@ struct VersionMeta {
     /// deprecation marker. Absence means "not deprecated".
     #[serde(default)]
     deprecated: Option<String>,
+    /// `bin` may be either a map of `{ name: path }` or a single string
+    /// (whose key is the package name). We normalise via
+    /// [`bin_names`].
+    #[serde(default)]
+    bin: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -248,6 +337,7 @@ mod tests {
                             name: n.to_string(),
                         }),
                         deprecated: None,
+                        bin: None,
                     },
                 )
             })
@@ -263,6 +353,7 @@ mod tests {
             scripts: None,
             npm_user: None,
             deprecated: d.map(str::to_string),
+            bin: None,
         }
     }
 
@@ -375,5 +466,122 @@ mod tests {
         } else {
             panic!();
         }
+    }
+
+    fn meta_with_bin_and_scripts(bin: serde_json::Value, scripts: &[(&str, &str)]) -> VersionMeta {
+        let scripts_map = if scripts.is_empty() {
+            None
+        } else {
+            Some(
+                scripts
+                    .iter()
+                    .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                    .collect(),
+            )
+        };
+        VersionMeta {
+            scripts: scripts_map,
+            npm_user: None,
+            deprecated: None,
+            bin: Some(bin),
+        }
+    }
+
+    fn surface_pkmt(prior: VersionMeta, current: VersionMeta) -> Packument {
+        let mut versions = HashMap::new();
+        versions.insert("1.0.0".to_string(), prior);
+        versions.insert("1.0.1".to_string(), current);
+        Packument {
+            time: HashMap::new(),
+            versions,
+        }
+    }
+
+    #[test]
+    fn surface_change_detects_added_bin_and_script() {
+        let prior =
+            meta_with_bin_and_scripts(serde_json::json!({ "foo": "./foo.js" }), &[("test", "tsc")]);
+        let current = meta_with_bin_and_scripts(
+            serde_json::json!({ "foo": "./foo.js", "bar": "./bar.js" }),
+            &[("test", "tsc"), ("postinstall", "node ./pi.js")],
+        );
+        let p = surface_pkmt(prior, current);
+        let s = detect_version_surface_change(&p, "1.0.1").expect("present");
+        match s {
+            Signal::VersionSurfaceChange {
+                previous_version,
+                added_bins,
+                added_scripts,
+            } => {
+                assert_eq!(previous_version, "1.0.0");
+                assert_eq!(added_bins, vec!["bar"]);
+                assert_eq!(added_scripts, vec!["postinstall"]);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn surface_change_returns_none_when_nothing_added() {
+        let prior = meta_with_bin_and_scripts(
+            serde_json::json!({ "foo": "./foo.js" }),
+            &[("postinstall", "x")],
+        );
+        // Removed bin + removed script — must not fire.
+        let current = meta_with_bin_and_scripts(serde_json::json!({}), &[]);
+        let p = surface_pkmt(prior, current);
+        assert!(detect_version_surface_change(&p, "1.0.1").is_none());
+    }
+
+    #[test]
+    fn surface_change_no_prior_version_returns_none() {
+        let only = meta_with_bin_and_scripts(
+            serde_json::json!({ "foo": "./foo.js" }),
+            &[("postinstall", "x")],
+        );
+        let mut versions = HashMap::new();
+        versions.insert("1.0.0".to_string(), only);
+        let p = Packument {
+            time: HashMap::new(),
+            versions,
+        };
+        assert!(detect_version_surface_change(&p, "1.0.0").is_none());
+    }
+
+    #[test]
+    fn surface_change_string_form_bin_normalised() {
+        // Both sides use the string form → same `<single>` sentinel,
+        // so no spurious add. Then current adds a script.
+        let prior = meta_with_bin_and_scripts(serde_json::json!("./cli.js"), &[("test", "x")]);
+        let current = meta_with_bin_and_scripts(
+            serde_json::json!("./cli.js"),
+            &[("test", "x"), ("preinstall", "y")],
+        );
+        let p = surface_pkmt(prior, current);
+        let s = detect_version_surface_change(&p, "1.0.1").expect("present");
+        if let Signal::VersionSurfaceChange {
+            added_bins,
+            added_scripts,
+            ..
+        } = s
+        {
+            assert!(added_bins.is_empty());
+            assert_eq!(added_scripts, vec!["preinstall"]);
+        } else {
+            panic!();
+        }
+    }
+
+    #[test]
+    fn surface_change_ignores_non_lifecycle_scripts() {
+        // Adding a `lint` script must not trigger; only the
+        // npm lifecycle script set counts.
+        let prior = meta_with_bin_and_scripts(serde_json::json!({}), &[("test", "tsc")]);
+        let current = meta_with_bin_and_scripts(
+            serde_json::json!({}),
+            &[("test", "tsc"), ("lint", "eslint .")],
+        );
+        let p = surface_pkmt(prior, current);
+        assert!(detect_version_surface_change(&p, "1.0.1").is_none());
     }
 }

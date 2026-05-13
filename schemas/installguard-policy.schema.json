@@ -15,6 +15,11 @@
           "description": "Emit a [`Reason::PublisherChange`] when the resolved version was published by a different npm account than the immediately-prior version. Default severity is `block`; downgrade via the `severity` map (e.g. `publisher-change: warn`).",
           "type": "boolean"
         },
+        "detectVersionSurfaceChange": {
+          "default": false,
+          "description": "Emit a [`Reason::VersionSurfaceChange`] when the resolved version adds new `bin` entries or new lifecycle-script names compared to the immediately-prior released version. Off by default — legitimate releases regularly add CLIs — but extremely useful when scoped to direct deps via `direct.detectVersionSurfaceChange: true`.",
+          "type": "boolean"
+        },
         "flagDeprecated": {
           "default": false,
           "description": "Emit a [`Reason::DeprecatedVersion`] when the registry reports the resolved version as deprecated. Default severity is `block`; many projects will want `severity.deprecated-version: warn` during a clean-up rollout.",
@@ -38,6 +43,14 @@
         "detectPublisherChange": {
           "default": null,
           "description": "Per-direct-dep override for [`Defaults::detect_publisher_change`]. When `Some(_)`, takes precedence for direct deps.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "detectVersionSurfaceChange": {
+          "default": null,
+          "description": "Per-direct-dep override for [`Defaults::detect_version_surface_change`].",
           "type": [
             "boolean",
             "null"
@@ -111,6 +124,7 @@
       "default": {
         "blockExoticSubdeps": false,
         "detectPublisherChange": false,
+        "detectVersionSurfaceChange": false,
         "flagDeprecated": false,
         "minimumReleaseAge": null
       }
@@ -123,6 +137,7 @@
       ],
       "default": {
         "detectPublisherChange": null,
+        "detectVersionSurfaceChange": null,
         "flagDeprecated": null,
         "minimumReleaseAge": null
       }

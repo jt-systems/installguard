@@ -53,6 +53,10 @@ impl Default for ScriptPolicy {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+// This is a configuration container — every field here is independently
+// toggleable by user policy, so a state-machine / enum refactor would
+// fight the data model rather than serve it.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Defaults {
     /// Minimum release age in minutes. `0` disables the check.
     pub minimum_release_age: Option<i64>,
@@ -71,6 +75,14 @@ pub struct Defaults {
     /// during a clean-up rollout.
     #[serde(default)]
     pub flag_deprecated: bool,
+    /// Emit a [`Reason::VersionSurfaceChange`] when the resolved
+    /// version adds new `bin` entries or new lifecycle-script names
+    /// compared to the immediately-prior released version. Off by
+    /// default — legitimate releases regularly add CLIs — but
+    /// extremely useful when scoped to direct deps via
+    /// `direct.detectVersionSurfaceChange: true`.
+    #[serde(default)]
+    pub detect_version_surface_change: bool,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
@@ -82,6 +94,9 @@ pub struct DirectOverrides {
     pub detect_publisher_change: Option<bool>,
     /// Per-direct-dep override for [`Defaults::flag_deprecated`].
     pub flag_deprecated: Option<bool>,
+    /// Per-direct-dep override for
+    /// [`Defaults::detect_version_surface_change`].
+    pub detect_version_surface_change: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -251,8 +266,18 @@ impl Policy {
                 pattern: pattern.to_string(),
                 excerpt: excerpt.to_string(),
             });
-        }
-        // ── Surface unavailability so it isn't silently swallowed ───────
+        } // ── Version surface change ──────────────────────────────────
+        if self.detect_version_surface_change_for(dep) {
+            if let Some((prev_v, bins, scripts)) = signals.version_surface_change() {
+                if !bins.is_empty() || !scripts.is_empty() {
+                    reasons.push(Reason::VersionSurfaceChange {
+                        previous_version: prev_v.to_string(),
+                        added_bins: bins.to_vec(),
+                        added_scripts: scripts.to_vec(),
+                    });
+                }
+            }
+        } // ── Surface unavailability so it isn't silently swallowed ───────
         for sig in &signals.signals {
             if let crate::signal::Signal::Unavailable { provider, reason } = sig {
                 reasons.push(Reason::SignalUnavailable {
@@ -331,6 +356,16 @@ impl Policy {
                 .unwrap_or(self.defaults.flag_deprecated)
         } else {
             self.defaults.flag_deprecated
+        }
+    }
+
+    fn detect_version_surface_change_for(&self, dep: &ResolvedDependency) -> bool {
+        if dep.direct {
+            self.direct
+                .detect_version_surface_change
+                .unwrap_or(self.defaults.detect_version_surface_change)
+        } else {
+            self.defaults.detect_version_surface_change
         }
     }
 
@@ -871,5 +906,72 @@ mod tests {
             }
             other => panic!("expected Block, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn version_surface_change_off_by_default() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::VersionSurfaceChange {
+            previous_version: "1.0.0".into(),
+            added_bins: vec!["new-cli".into()],
+            added_scripts: vec!["postinstall".into()],
+        });
+        let d = p.evaluate(
+            &dep("foo", true, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Allow), "got {d:?}");
+    }
+
+    #[test]
+    fn version_surface_change_blocks_when_enabled() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\ndefaults:\n  detectVersionSurfaceChange: true\n")
+                .unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::VersionSurfaceChange {
+            previous_version: "1.0.0".into(),
+            added_bins: vec!["new-cli".into()],
+            added_scripts: vec![],
+        });
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        match d {
+            Decision::Block { reasons } => {
+                assert_eq!(reasons.len(), 1);
+                assert_eq!(reasons[0].code(), "version-surface-change");
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn version_surface_change_direct_only_via_override() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\ndirect:\n  detectVersionSurfaceChange: true\n")
+                .unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::VersionSurfaceChange {
+            previous_version: "1.0.0".into(),
+            added_bins: vec![],
+            added_scripts: vec!["postinstall".into()],
+        });
+        let direct = p.evaluate(
+            &dep("foo", true, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(direct.is_block(), "direct should block: {direct:?}");
+        let transitive = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(transitive, Decision::Allow));
     }
 }
