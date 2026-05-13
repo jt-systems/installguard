@@ -25,6 +25,13 @@ pub enum Signal {
         previous: String,
         current: String,
     },
+    /// The registry has marked this version as deprecated. The optional
+    /// `message` is the human-readable string the maintainer (or the
+    /// registry) attached when the deprecation was recorded. Captures
+    /// post-publish trust changes — a common path for malicious
+    /// versions to be pulled out of circulation while existing
+    /// lockfiles continue to pin them.
+    DeprecatedVersion { message: Option<String> },
     /// The provider could not produce signals for this dependency. Always
     /// recorded so policy can decide how to treat unknowns.
     Unavailable { provider: String, reason: String },
@@ -67,6 +74,17 @@ impl SignalSet {
                 previous.as_str(),
                 current.as_str(),
             )),
+            _ => None,
+        })
+    }
+
+    /// Returns the deprecation signal if one was recorded. Inner option
+    /// is the maintainer-supplied message (registries often record an
+    /// empty string for "no message"; that becomes `Some("")`).
+    #[must_use]
+    pub fn deprecated(&self) -> Option<Option<&str>> {
+        self.signals.iter().find_map(|s| match s {
+            Signal::DeprecatedVersion { message } => Some(message.as_deref()),
             _ => None,
         })
     }

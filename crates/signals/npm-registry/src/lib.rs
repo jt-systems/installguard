@@ -115,6 +115,9 @@ impl SignalProvider for NpmRegistryProvider {
             if !scripts.is_empty() {
                 out.push(Signal::LifecycleScripts { scripts });
             }
+            if let Some(sig) = deprecation_signal(version_meta) {
+                out.push(sig);
+            }
         }
 
         if let Some(change) = detect_publisher_change(&body, &dep.version) {
@@ -123,6 +126,21 @@ impl SignalProvider for NpmRegistryProvider {
 
         Ok(out)
     }
+}
+
+/// Builds a `DeprecatedVersion` signal from a packument version entry.
+/// The wire field is `versions[v].deprecated`, a string. By npm
+/// convention the presence of the field — even with an empty value
+/// — is the deprecation marker; an absent field means "not
+/// deprecated". An empty string normalises to `message = None`.
+fn deprecation_signal(meta: &VersionMeta) -> Option<Signal> {
+    let raw = meta.deprecated.as_deref()?;
+    let message = if raw.is_empty() {
+        None
+    } else {
+        Some(raw.to_string())
+    };
+    Some(Signal::DeprecatedVersion { message })
 }
 
 /// Compares `_npmUser.name` for `current_version` against the immediately
@@ -184,6 +202,11 @@ struct VersionMeta {
     /// version. Field is `_npmUser` on the wire.
     #[serde(default, rename = "_npmUser")]
     npm_user: Option<NpmUser>,
+    /// `deprecated` is a free-form string set by `npm deprecate`. The
+    /// presence of the field — even with an empty value — is the
+    /// deprecation marker. Absence means "not deprecated".
+    #[serde(default)]
+    deprecated: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,6 +235,7 @@ mod tests {
                         npm_user: user.map(|n| NpmUser {
                             name: n.to_string(),
                         }),
+                        deprecated: None,
                     },
                 )
             })
@@ -219,6 +243,40 @@ mod tests {
         Packument {
             time: HashMap::new(),
             versions,
+        }
+    }
+
+    fn meta_with_deprecation(d: Option<&str>) -> VersionMeta {
+        VersionMeta {
+            scripts: None,
+            npm_user: None,
+            deprecated: d.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn deprecation_absent_field_returns_none() {
+        let m = meta_with_deprecation(None);
+        assert!(deprecation_signal(&m).is_none());
+    }
+
+    #[test]
+    fn deprecation_empty_string_is_marker_with_no_message() {
+        let m = meta_with_deprecation(Some(""));
+        match deprecation_signal(&m).expect("present") {
+            Signal::DeprecatedVersion { message } => assert!(message.is_none()),
+            other => panic!("unexpected signal {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deprecation_message_preserved_verbatim() {
+        let m = meta_with_deprecation(Some("use foo@2 instead"));
+        match deprecation_signal(&m).expect("present") {
+            Signal::DeprecatedVersion { message } => {
+                assert_eq!(message.as_deref(), Some("use foo@2 instead"));
+            }
+            other => panic!("unexpected signal {other:?}"),
         }
     }
 

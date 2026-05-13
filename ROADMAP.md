@@ -64,6 +64,7 @@ Make decisions reproducible and provable.
 Move beyond age into the multi-signal model from the whitepaper §7.
 
 - ☑ Publisher-change detection (`vN` vs `vN-1` maintainers)
+- ☑ Deprecated-version detection (registry-side post-publish trust signal; pairs with publisher-change)
 - ☐ Maintainer 2FA status check
 - ☐ Maintainer account-age check
 - ☐ Dist-tag churn detection

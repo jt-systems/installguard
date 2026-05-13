@@ -196,6 +196,10 @@ fn summarise(r: &Reason) -> String {
         } => format!(
             "publisher changed: {previous_version} was published by `{previous}`, current by `{current}`"
         ),
+        Reason::DeprecatedVersion { message } => match message.as_deref() {
+            Some(m) if !m.is_empty() => format!("registry-deprecated: {m}"),
+            _ => "registry marked this version deprecated".to_string(),
+        },
         Reason::SignalUnavailable { provider, reason } => {
             format!("signal provider `{provider}` unavailable: {reason}")
         }

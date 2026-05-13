@@ -35,6 +35,11 @@ pub enum Reason {
         previous: String,
         current: String,
     },
+    /// The registry has marked the resolved version as deprecated.
+    /// Carries the maintainer-supplied message verbatim when present.
+    DeprecatedVersion {
+        message: Option<String>,
+    },
     SignalUnavailable {
         provider: String,
         reason: String,
@@ -54,6 +59,7 @@ impl Reason {
             Self::LifecycleScriptIgnored { .. } => "lifecycle-script-ignored",
             Self::PublishedAtUnknown => "published-at-unknown",
             Self::PublisherChange { .. } => "publisher-change",
+            Self::DeprecatedVersion { .. } => "deprecated-version",
             Self::SignalUnavailable { .. } => "signal-unavailable",
         }
     }

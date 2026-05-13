@@ -65,6 +65,12 @@ pub struct Defaults {
     /// `severity` map (e.g. `publisher-change: warn`).
     #[serde(default)]
     pub detect_publisher_change: bool,
+    /// Emit a [`Reason::DeprecatedVersion`] when the registry reports
+    /// the resolved version as deprecated. Default severity is `block`;
+    /// many projects will want `severity.deprecated-version: warn`
+    /// during a clean-up rollout.
+    #[serde(default)]
+    pub flag_deprecated: bool,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
@@ -74,6 +80,8 @@ pub struct DirectOverrides {
     /// Per-direct-dep override for [`Defaults::detect_publisher_change`].
     /// When `Some(_)`, takes precedence for direct deps.
     pub detect_publisher_change: Option<bool>,
+    /// Per-direct-dep override for [`Defaults::flag_deprecated`].
+    pub flag_deprecated: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -225,7 +233,14 @@ impl Policy {
                 });
             }
         }
-
+        // ── Deprecation ───────────────────────────────────────────
+        if self.flag_deprecated_for(dep) {
+            if let Some(msg) = signals.deprecated() {
+                reasons.push(Reason::DeprecatedVersion {
+                    message: msg.map(str::to_string),
+                });
+            }
+        }
         // ── Surface unavailability so it isn't silently swallowed ───────
         for sig in &signals.signals {
             if let crate::signal::Signal::Unavailable { provider, reason } = sig {
@@ -295,6 +310,16 @@ impl Policy {
                 .unwrap_or(self.defaults.detect_publisher_change)
         } else {
             self.defaults.detect_publisher_change
+        }
+    }
+
+    fn flag_deprecated_for(&self, dep: &ResolvedDependency) -> bool {
+        if dep.direct {
+            self.direct
+                .flag_deprecated
+                .unwrap_or(self.defaults.flag_deprecated)
+        } else {
+            self.defaults.flag_deprecated
         }
     }
 
@@ -686,6 +711,82 @@ mod tests {
         assert!(direct.is_block(), "direct should block: {direct:?}");
         let transitive = p.evaluate(
             &dep("axios", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(transitive, Decision::Allow));
+    }
+
+    #[test]
+    fn deprecated_blocks_when_enabled_and_carries_message() {
+        let p = Policy::from_yaml("policyVersion: 1\ndefaults:\n  flagDeprecated: true\n").unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::DeprecatedVersion {
+            message: Some("use foo@2 instead".into()),
+        });
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        match d {
+            Decision::Block { reasons } => {
+                assert_eq!(reasons.len(), 1);
+                match &reasons[0] {
+                    Reason::DeprecatedVersion { message } => {
+                        assert_eq!(message.as_deref(), Some("use foo@2 instead"));
+                    }
+                    other => panic!("wrong reason: {other:?}"),
+                }
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deprecated_silent_when_disabled() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::DeprecatedVersion { message: None });
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Allow));
+    }
+
+    #[test]
+    fn deprecated_demotable_to_warn_with_no_message() {
+        let p = Policy::from_yaml(
+            "policyVersion: 1\n\
+             defaults:\n  flagDeprecated: true\n\
+             severity:\n  deprecated-version: warn\n",
+        )
+        .unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::DeprecatedVersion { message: None });
+        let d = p.evaluate(
+            &dep("foo", true, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Warn { .. }), "got {d:?}");
+    }
+
+    #[test]
+    fn deprecated_direct_only_via_override() {
+        let p = Policy::from_yaml("policyVersion: 1\ndirect:\n  flagDeprecated: true\n").unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::DeprecatedVersion { message: None });
+        let direct = p.evaluate(
+            &dep("foo", true, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(direct.is_block(), "direct should block: {direct:?}");
+        let transitive = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
             &signals,
             Utc::now(),
         );

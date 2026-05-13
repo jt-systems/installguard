@@ -15,6 +15,11 @@
           "description": "Emit a [`Reason::PublisherChange`] when the resolved version was published by a different npm account than the immediately-prior version. Default severity is `block`; downgrade via the `severity` map (e.g. `publisher-change: warn`).",
           "type": "boolean"
         },
+        "flagDeprecated": {
+          "default": false,
+          "description": "Emit a [`Reason::DeprecatedVersion`] when the registry reports the resolved version as deprecated. Default severity is `block`; many projects will want `severity.deprecated-version: warn` during a clean-up rollout.",
+          "type": "boolean"
+        },
         "minimumReleaseAge": {
           "default": null,
           "description": "Minimum release age in minutes. `0` disables the check.",
@@ -33,6 +38,14 @@
         "detectPublisherChange": {
           "default": null,
           "description": "Per-direct-dep override for [`Defaults::detect_publisher_change`]. When `Some(_)`, takes precedence for direct deps.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "flagDeprecated": {
+          "default": null,
+          "description": "Per-direct-dep override for [`Defaults::flag_deprecated`].",
           "type": [
             "boolean",
             "null"
@@ -98,6 +111,7 @@
       "default": {
         "blockExoticSubdeps": false,
         "detectPublisherChange": false,
+        "flagDeprecated": false,
         "minimumReleaseAge": null
       }
     },
@@ -109,6 +123,7 @@
       ],
       "default": {
         "detectPublisherChange": null,
+        "flagDeprecated": null,
         "minimumReleaseAge": null
       }
     },
