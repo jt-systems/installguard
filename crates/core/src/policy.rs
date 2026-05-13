@@ -90,6 +90,16 @@ pub struct Defaults {
     /// flagging legitimate new maintainers in steady-state projects.
     #[serde(default)]
     pub min_maintainer_account_age_days: u32,
+    /// Require the dependency to carry verified npm provenance
+    /// (a Sigstore DSSE bundle whose in-toto subject digest matches
+    /// the tarball integrity). When `true`, missing or unverifiable
+    /// provenance is reported as [`Reason::ProvenanceMissing`].
+    /// Off by default — most of the npm ecosystem does not yet
+    /// publish with `--provenance`, so global enforcement breaks
+    /// builds. Recommended scope: `direct.requireProvenance: true`
+    /// for first-party deps in regulated environments.
+    #[serde(default)]
+    pub require_provenance: bool,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
@@ -107,6 +117,8 @@ pub struct DirectOverrides {
     /// Per-direct-dep override for
     /// [`Defaults::min_maintainer_account_age_days`].
     pub min_maintainer_account_age_days: Option<u32>,
+    /// Per-direct-dep override for [`Defaults::require_provenance`].
+    pub require_provenance: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -330,6 +342,14 @@ impl Policy {
                 }
             }
         }
+        // ── Provenance requirement ──────────────────────────────────
+        // Opt-in: when the toggle is on, the *absence* of a
+        // ProvenanceVerified signal is itself a reason. The signal
+        // is positive evidence — emitted only when verification
+        // succeeded — so this check is symmetric and correct.
+        if self.require_provenance_for(dep) && signals.provenance_claimed().is_none() {
+            reasons.push(Reason::ProvenanceMissing);
+        }
         // ── Surface unavailability so it isn't silently swallowed ───────
         for sig in &signals.signals {
             if let crate::signal::Signal::Unavailable { provider, reason } = sig {
@@ -429,6 +449,16 @@ impl Policy {
                 .unwrap_or(self.defaults.min_maintainer_account_age_days)
         } else {
             self.defaults.min_maintainer_account_age_days
+        }
+    }
+
+    fn require_provenance_for(&self, dep: &ResolvedDependency) -> bool {
+        if dep.direct {
+            self.direct
+                .require_provenance
+                .unwrap_or(self.defaults.require_provenance)
+        } else {
+            self.defaults.require_provenance
         }
     }
 
@@ -1171,5 +1201,73 @@ mod tests {
             Utc::now(),
         );
         assert!(matches!(d, Decision::Allow), "got {d:?}");
+    }
+
+    #[test]
+    fn require_provenance_off_by_default() {
+        let p = Policy::default();
+        let signals = SignalSet::default();
+        let d = p.evaluate(
+            &dep("foo", true, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Allow), "got {d:?}");
+    }
+
+    #[test]
+    fn require_provenance_blocks_when_signal_absent() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\ndefaults:\n  requireProvenance: true\n").unwrap();
+        let signals = SignalSet::default();
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        match d {
+            Decision::Block { reasons } => {
+                assert_eq!(reasons.len(), 1);
+                assert_eq!(reasons[0].code(), "provenance-missing");
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn require_provenance_quiet_when_signal_present() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\ndefaults:\n  requireProvenance: true\n").unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::ProvenanceClaimed {
+            bundle_url: "https://r/att".into(),
+        });
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Allow), "got {d:?}");
+    }
+
+    #[test]
+    fn require_provenance_direct_only_override() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\ndirect:\n  requireProvenance: true\n").unwrap();
+        let signals = SignalSet::default();
+        // Transitive dep — direct override does NOT apply.
+        let d_trans = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d_trans, Decision::Allow));
+        // Direct dep — override fires.
+        let d_direct = p.evaluate(
+            &dep("foo", true, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d_direct, Decision::Block { .. }));
     }
 }

@@ -77,6 +77,10 @@ impl SignalProvider for NpmRegistryProvider {
         )
     }
 
+    // Each detector block is intentionally inline so the read order
+    // matches the priority order. Refactoring into helper methods
+    // would obscure that flow without removing complexity.
+    #[allow(clippy::too_many_lines)]
     async fn signals(&self, dep: &ResolvedDependency) -> Result<Vec<Signal>, SignalError> {
         let url = format!("{}/{}", self.registry, encode_name(&dep.name));
         tracing::debug!(url, "fetching packument");
@@ -181,6 +185,29 @@ impl SignalProvider for NpmRegistryProvider {
             }
         }
 
+        // Provenance: structural verification only — we confirm the
+        // bundle's in-toto subject digest matches `dist.integrity`,
+        // proving the publisher tied the bundle to this exact
+        // tarball. We do NOT verify the bundle's signature against
+        // Sigstore's Fulcio roots (deferred alongside keyless
+        // Sigstore). Absence is silent — most npm packages do not
+        // yet publish with `--provenance`.
+        if let Some(version_meta) = body.versions.get(&dep.version) {
+            if let Some(dist) = version_meta.dist.as_ref() {
+                if let (Some(integrity), Some(att)) =
+                    (dist.integrity.as_deref(), dist.attestations.as_ref())
+                {
+                    if let Some(bundle_json) = self.fetch_attestation_bundle(&att.url).await {
+                        if let Some(sig) =
+                            compute_provenance_signal(&att.url, &bundle_json, integrity)
+                        {
+                            out.push(sig);
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(out)
     }
 }
@@ -224,6 +251,25 @@ impl NpmRegistryProvider {
             cache.insert(name.to_string(), result);
         }
         result
+    }
+
+    /// Fetches the npm-hosted attestation bundle as raw JSON text.
+    /// Not cached — bundles are version-specific and only fetched
+    /// once per dependency anyway. Returns `None` on any failure;
+    /// callers treat absence as "no provenance evidence".
+    async fn fetch_attestation_bundle(&self, url: &str) -> Option<String> {
+        tracing::debug!(url, "fetching npm attestation bundle");
+        let resp = self
+            .client
+            .get(url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        resp.text().await.ok()
     }
 }
 
@@ -275,6 +321,83 @@ pub fn compute_maintainer_account_signal(
         account: account.to_string(),
         age_days,
     })
+}
+
+/// Pure helper: given the URL the bundle was fetched from, the
+/// raw JSON body, and the package's `dist.integrity` SRI string
+/// (e.g. `"sha512-<base64>"`), returns a
+/// [`Signal::ProvenanceClaimed`] iff at least one in-toto subject
+/// digest inside any DSSE-wrapped attestation matches the
+/// integrity hash. This is a *structural* match — it confirms the
+/// publisher tied the bundle to this exact tarball, but does NOT
+/// cryptographically verify the bundle's signature.
+///
+/// Returns `None` on any parse failure or if no subject digest
+/// matches; we never fabricate trust evidence from malformed input.
+#[must_use]
+pub fn compute_provenance_signal(
+    bundle_url: &str,
+    bundle_json: &str,
+    dist_integrity: &str,
+) -> Option<Signal> {
+    let (algo, expected_hex) = decode_sri(dist_integrity)?;
+    let root: serde_json::Value = serde_json::from_str(bundle_json).ok()?;
+    let attestations = root.get("attestations")?.as_array()?;
+    for entry in attestations {
+        // Two shapes seen in the wild: the DSSE envelope is either
+        // directly under `bundle.dsseEnvelope` (Sigstore bundle
+        // format) or directly under `dsseEnvelope` (older shape).
+        let envelope = entry
+            .pointer("/bundle/dsseEnvelope")
+            .or_else(|| entry.pointer("/dsseEnvelope"))?;
+        let payload_b64 = envelope.get("payload")?.as_str()?;
+        let payload = base64_decode(payload_b64)?;
+        let statement: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+        let subjects = statement.get("subject")?.as_array()?;
+        for subject in subjects {
+            let Some(digest) = subject.get("digest").and_then(serde_json::Value::as_object) else {
+                continue;
+            };
+            if let Some(hex_str) = digest.get(algo).and_then(serde_json::Value::as_str) {
+                if hex_str.eq_ignore_ascii_case(&expected_hex) {
+                    return Some(Signal::ProvenanceClaimed {
+                        bundle_url: bundle_url.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Splits an SRI string `"<algo>-<base64>"` into its algorithm
+/// name and the lowercase-hex form of the digest. Returns `None`
+/// for any malformed input. We accept only `sha256`, `sha384`,
+/// `sha512` — the algorithms in-toto subjects are known to use.
+fn decode_sri(sri: &str) -> Option<(&'static str, String)> {
+    let (prefix, b64) = sri.split_once('-')?;
+    let algo = match prefix {
+        "sha256" => "sha256",
+        "sha384" => "sha384",
+        "sha512" => "sha512",
+        _ => return None,
+    };
+    let bytes = base64_decode(b64)?;
+    Some((algo, hex::encode(bytes)))
+}
+
+/// Tolerant base64 decoder accepting standard or URL-safe alphabets,
+/// with or without padding. npm and Sigstore bundles in the wild
+/// use the standard alphabet with padding, but Sigstore's spec
+/// permits either; be liberal in what we accept.
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(s))
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(s))
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s))
+        .ok()
 }
 
 /// Builds a `DeprecatedVersion` signal from a packument version entry.
@@ -475,6 +598,29 @@ struct VersionMeta {
     /// [`bin_names`].
     #[serde(default)]
     bin: Option<serde_json::Value>,
+    /// `dist` carries delivery metadata: tarball URL, integrity hash,
+    /// and — when the version was published with `--provenance` —
+    /// a pointer to the Sigstore attestation bundle.
+    #[serde(default)]
+    dist: Option<DistMeta>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DistMeta {
+    /// SRI-format hash, e.g. `"sha512-<base64>=="`. We split on the
+    /// first `-`; the prefix names the algorithm and the suffix is
+    /// base64. Always populated by modern npm publishes.
+    #[serde(default)]
+    integrity: Option<String>,
+    /// Pointer to the npm-hosted attestation bundle, present only
+    /// when the publisher used `npm publish --provenance`.
+    #[serde(default)]
+    attestations: Option<DistAttestations>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DistAttestations {
+    url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -505,6 +651,7 @@ mod tests {
                         }),
                         deprecated: None,
                         bin: None,
+                        dist: None,
                     },
                 )
             })
@@ -522,6 +669,7 @@ mod tests {
             npm_user: None,
             deprecated: d.map(str::to_string),
             bin: None,
+            dist: None,
         }
     }
 
@@ -652,6 +800,7 @@ mod tests {
             npm_user: None,
             deprecated: None,
             bin: Some(bin),
+            dist: None,
         }
     }
 
@@ -766,6 +915,7 @@ mod tests {
                         npm_user: None,
                         deprecated: None,
                         bin: None,
+                        dist: None,
                     },
                 )
             })
@@ -856,5 +1006,84 @@ mod tests {
         assert_eq!(urlencoding("alice"), "alice");
         assert_eq!(urlencoding("alice.bob"), "alice.bob");
         assert_eq!(urlencoding("a:b"), "a%3Ab");
+    }
+
+    fn make_bundle(subject_sha512_hex: &str) -> String {
+        use base64::Engine as _;
+        let statement = serde_json::json!({
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [{
+                "name": "pkg:npm/example@1.0.0",
+                "digest": { "sha512": subject_sha512_hex }
+            }],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {}
+        });
+        let payload_b64 = base64::engine::general_purpose::STANDARD
+            .encode(serde_json::to_vec(&statement).unwrap());
+        serde_json::json!({
+            "attestations": [{
+                "predicateType": "https://slsa.dev/provenance/v1",
+                "bundle": {
+                    "mediaType": "application/vnd.dev.sigstore.bundle+json;version=0.1",
+                    "dsseEnvelope": {
+                        "payloadType": "application/vnd.in-toto+json",
+                        "payload": payload_b64,
+                        "signatures": []
+                    }
+                }
+            }]
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn provenance_signal_emitted_on_subject_match() {
+        // Construct a tarball blob, hash it, base64-encode for SRI,
+        // hex-encode for in-toto subject. Both forms must agree.
+        use base64::Engine as _;
+        use sha2::{Digest, Sha512};
+        let blob = b"fake-tarball-bytes";
+        let hash = Sha512::digest(blob);
+        let hex_form = hex::encode(hash);
+        let sri = format!(
+            "sha512-{}",
+            base64::engine::general_purpose::STANDARD.encode(hash)
+        );
+        let bundle = make_bundle(&hex_form);
+        let sig = compute_provenance_signal("https://r/att", &bundle, &sri).unwrap();
+        match sig {
+            Signal::ProvenanceClaimed { bundle_url } => {
+                assert_eq!(bundle_url, "https://r/att");
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn provenance_signal_none_on_subject_mismatch() {
+        use base64::Engine as _;
+        use sha2::{Digest, Sha512};
+        let real = Sha512::digest(b"real-bytes");
+        let other = Sha512::digest(b"other-bytes");
+        let sri = format!(
+            "sha512-{}",
+            base64::engine::general_purpose::STANDARD.encode(real)
+        );
+        let bundle = make_bundle(&hex::encode(other));
+        assert!(compute_provenance_signal("u", &bundle, &sri).is_none());
+    }
+
+    #[test]
+    fn provenance_signal_none_on_malformed_bundle() {
+        assert!(compute_provenance_signal("u", "not-json", "sha512-aGVsbG8=").is_none());
+        assert!(compute_provenance_signal("u", "{}", "sha512-aGVsbG8=").is_none());
+    }
+
+    #[test]
+    fn provenance_signal_rejects_unknown_sri_algo() {
+        let bundle = make_bundle("00");
+        assert!(compute_provenance_signal("u", &bundle, "md5-aGVsbG8=").is_none());
+        assert!(compute_provenance_signal("u", &bundle, "no-dash").is_none());
     }
 }

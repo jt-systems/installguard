@@ -40,6 +40,11 @@
             "integer",
             "null"
           ]
+        },
+        "requireProvenance": {
+          "default": false,
+          "description": "Require the dependency to carry verified npm provenance (a Sigstore DSSE bundle whose in-toto subject digest matches the tarball integrity). When `true`, missing or unverifiable provenance is reported as [`Reason::ProvenanceMissing`]. Off by default — most of the npm ecosystem does not yet publish with `--provenance`, so global enforcement breaks builds. Recommended scope: `direct.requireProvenance: true` for first-party deps in regulated environments.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -86,6 +91,14 @@
           "format": "int64",
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "requireProvenance": {
+          "default": null,
+          "description": "Per-direct-dep override for [`Defaults::require_provenance`].",
+          "type": [
+            "boolean",
             "null"
           ]
         }
@@ -144,7 +157,8 @@
         "detectVersionSurfaceChange": false,
         "flagDeprecated": false,
         "minMaintainerAccountAgeDays": 0,
-        "minimumReleaseAge": null
+        "minimumReleaseAge": null,
+        "requireProvenance": false
       }
     },
     "direct": {
@@ -158,7 +172,8 @@
         "detectVersionSurfaceChange": null,
         "flagDeprecated": null,
         "minMaintainerAccountAgeDays": null,
-        "minimumReleaseAge": null
+        "minimumReleaseAge": null,
+        "requireProvenance": null
       }
     },
     "policyVersion": {

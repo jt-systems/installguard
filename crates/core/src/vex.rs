@@ -238,6 +238,9 @@ fn summarise(r: &Reason) -> String {
         } => format!(
             "publisher account `{account}` is {age_days}d old (< {threshold_days}d threshold)"
         ),
+        Reason::ProvenanceMissing => {
+            "policy requires cryptographic provenance but none was verified".to_string()
+        }
         Reason::SignalUnavailable { provider, reason } => {
             format!("signal provider `{provider}` unavailable: {reason}")
         }

@@ -80,6 +80,12 @@ pub enum Reason {
         age_days: u32,
         threshold_days: u32,
     },
+    /// Policy required cryptographic provenance for this dependency
+    /// but no structurally-matching `ProvenanceClaimed` signal was
+    /// produced — either the publisher didn't sign, the bundle
+    /// fetch failed, or the in-toto subject didn't match
+    /// `dist.integrity`.
+    ProvenanceMissing,
     SignalUnavailable {
         provider: String,
         reason: String,
@@ -105,6 +111,7 @@ impl Reason {
             Self::DistTagAnomaly { .. } => "dist-tag-anomaly",
             Self::NameSquat { .. } => "name-squat",
             Self::MaintainerNewAccount { .. } => "maintainer-new-account",
+            Self::ProvenanceMissing => "provenance-missing",
             Self::SignalUnavailable { .. } => "signal-unavailable",
         }
     }

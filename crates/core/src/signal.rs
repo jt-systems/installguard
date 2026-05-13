@@ -79,6 +79,15 @@ pub enum Signal {
     /// account creation and version publication; the policy layer
     /// decides whether `age_days < threshold_days` is actionable.
     MaintainerNewAccount { account: String, age_days: u32 },
+    /// The package version was published with npm provenance and
+    /// the in-toto subject digest in the DSSE bundle matches the
+    /// tarball's `dist.integrity` hash. This is a *structural*
+    /// match — it confirms the publisher tied the bundle to this
+    /// exact tarball, but does NOT cryptographically verify the
+    /// bundle's signature against Sigstore's Fulcio roots
+    /// (deferred alongside the keyless-Sigstore slice). Absence is
+    /// not suspicious, but presence is a trust boost.
+    ProvenanceClaimed { bundle_url: String },
     /// The provider could not produce signals for this dependency. Always
     /// recorded so policy can decide how to treat unknowns.
     Unavailable { provider: String, reason: String },
@@ -198,6 +207,16 @@ impl SignalSet {
             Signal::MaintainerNewAccount { account, age_days } => {
                 Some((account.as_str(), *age_days))
             }
+            _ => None,
+        })
+    }
+
+    /// Returns the provenance-claimed signal if one was recorded.
+    /// Returns the bundle URL.
+    #[must_use]
+    pub fn provenance_claimed(&self) -> Option<&str> {
+        self.signals.iter().find_map(|s| match s {
+            Signal::ProvenanceClaimed { bundle_url } => Some(bundle_url.as_str()),
             _ => None,
         })
     }
