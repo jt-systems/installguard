@@ -895,7 +895,10 @@ dependencies = [
  "installguard-adapter-yarn",
  "installguard-cache",
  "installguard-core",
+ "installguard-signal-depsdev",
  "installguard-signal-npm-registry",
+ "installguard-signal-osv",
+ "installguard-signal-scorecard",
  "serde_json",
  "tokio",
  "tracing",
@@ -956,6 +959,7 @@ dependencies = [
  "base64",
  "chrono",
  "ed25519-dalek",
+ "futures",
  "hex",
  "rand 0.8.6",
  "regex",
@@ -965,6 +969,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

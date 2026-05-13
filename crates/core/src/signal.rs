@@ -337,3 +337,20 @@ pub trait SignalProvider: Send + Sync {
     fn supports(&self, dep: &ResolvedDependency) -> bool;
     async fn signals(&self, dep: &ResolvedDependency) -> Result<Vec<Signal>, SignalError>;
 }
+
+/// Forwarding impl so callers can store providers behind a
+/// `Box<dyn SignalProvider>` and still hand them to generic
+/// wrappers (e.g. `CachedProvider<P>`). Without this the
+/// composite + cache layering wouldn't type-check.
+#[async_trait::async_trait]
+impl<T: SignalProvider + ?Sized> SignalProvider for Box<T> {
+    fn id(&self) -> &'static str {
+        (**self).id()
+    }
+    fn supports(&self, dep: &ResolvedDependency) -> bool {
+        (**self).supports(dep)
+    }
+    async fn signals(&self, dep: &ResolvedDependency) -> Result<Vec<Signal>, SignalError> {
+        (**self).signals(dep).await
+    }
+}

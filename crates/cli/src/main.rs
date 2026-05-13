@@ -24,7 +24,11 @@ use installguard_core::dependency::ResolvedDependency;
 use installguard_core::lockfile::{InstallguardLock, LockEntry};
 use installguard_core::policy::{EvalContext, Policy};
 use installguard_core::signal::{SignalProvider, SignalSet};
+use installguard_core::CompositeProvider;
+use installguard_signal_depsdev::DepsDevProvider;
 use installguard_signal_npm_registry::NpmRegistryProvider;
+use installguard_signal_osv::OsvProvider;
+use installguard_signal_scorecard::ScorecardProvider;
 
 #[derive(Debug, Parser)]
 #[command(name = "installguard", version, about, long_about = None)]
@@ -89,6 +93,7 @@ enum KeyCommand {
 
 /// Inputs shared by `scan` and `ci`.
 #[derive(Debug, Clone, clap::Args)]
+#[allow(clippy::struct_excessive_bools)] // CLI args container; flags are independent.
 struct EvalArgs {
     /// Path to the project root (defaults to current directory).
     #[arg(long, default_value = ".")]
@@ -109,6 +114,19 @@ struct EvalArgs {
     /// Disable the on-disk cache for this run.
     #[arg(long)]
     no_cache: bool,
+
+    /// Disable the OSV advisory provider for this run.
+    /// Useful for fully offline / air-gapped CI runs.
+    #[arg(long)]
+    no_osv: bool,
+
+    /// Disable the deps.dev project-metadata provider for this run.
+    #[arg(long)]
+    no_deps_dev: bool,
+
+    /// Disable the OpenSSF Scorecard provider for this run.
+    #[arg(long)]
+    no_scorecard: bool,
 
     /// Treat lifecycle scripts as ignored (matches `npm install
     /// --ignore-scripts`). Lifecycle script reasons are reported as
@@ -584,9 +602,41 @@ fn locate_lockfile<'a>(
 }
 
 fn build_provider(args: &EvalArgs) -> Result<Box<dyn SignalProvider>> {
-    let registry = NpmRegistryProvider::new().context("building http client")?;
+    // Always-on: the npm registry provider (without it the rest
+    // have nothing to anchor to). External catalogues are
+    // opt-out via --no-osv / --no-deps-dev / --no-scorecard so
+    // air-gapped CI runs can collapse the composite back to a
+    // single provider in one flag.
+    let mut children: Vec<Box<dyn SignalProvider>> = Vec::new();
+    children.push(Box::new(
+        NpmRegistryProvider::new().context("building npm-registry http client")?,
+    ));
+    if !args.no_osv {
+        children.push(Box::new(
+            OsvProvider::new().context("building OSV http client")?,
+        ));
+    }
+    if !args.no_deps_dev {
+        children.push(Box::new(
+            DepsDevProvider::new().context("building deps.dev http client")?,
+        ));
+    }
+    if !args.no_scorecard {
+        children.push(Box::new(
+            ScorecardProvider::new().context("building Scorecard http client")?,
+        ));
+    }
+    let composite: Box<dyn SignalProvider> = if children.len() == 1 {
+        // Avoid the composite layer when only one provider is
+        // armed — preserves the no-flag baseline behaviour of
+        // earlier slices and keeps the tracing / cache key
+        // surface identical for that case.
+        children.pop().expect("len==1 just checked")
+    } else {
+        Box::new(CompositeProvider::new(children))
+    };
     if args.no_cache {
-        return Ok(Box::new(registry));
+        return Ok(composite);
     }
     let dir = match &args.cache_dir {
         Some(p) => p.clone(),
@@ -599,7 +649,7 @@ fn build_provider(args: &EvalArgs) -> Result<Box<dyn SignalProvider>> {
     );
     tracing::debug!(path = %dir.display(), "cache opened");
     Ok(Box::new(CachedProvider::new(
-        registry,
+        composite,
         cache,
         Ttl::default(),
     )))
