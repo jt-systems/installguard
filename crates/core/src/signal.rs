@@ -330,11 +330,64 @@ pub enum SignalError {
     UnsupportedEcosystem,
 }
 
-/// Implementations live in `crates/signals/<id>/`.
+/// Plugin contract for third-party signal providers.
+///
+/// # Stability
+///
+/// `SignalProvider` is a **public extension point**. From v0.1
+/// onwards we treat the trait's surface (method names, signatures
+/// and error type) as semver-stable: additive changes only,
+/// breaking changes will go through a major-version bump and a
+/// deprecation cycle. The [`Signal`] enum is `#[non_exhaustive]`
+/// in spirit (matched ergonomically by always providing a
+/// catch-all in the policy / trust-score layers); new variants
+/// may be added in minor releases and downstream providers should
+/// be tolerant of receiving signals they did not produce.
+///
+/// # Implementing a provider
+///
+/// 1. Add a dependency on `installguard-core` matching your
+///    target runtime version.
+/// 2. Define a `pub struct YourProvider` carrying any clients,
+///    caches or configuration the provider needs.
+/// 3. Implement [`SignalProvider`]. `id()` should return a
+///    stable kebab- or snake-case identifier (audit logs and
+///    trust-score breakdowns key off it). `supports()` is called
+///    cheaply and frequently — keep it allocation-free.
+/// 4. Wire your provider into the host (today: a static
+///    [`crate::CompositeProvider`] composition; M7+ may add a
+///    discovery-and-verification loader).
+///
+/// See `crates/core/examples/minimal_provider.rs` for a complete
+/// 30-line example.
+///
+/// # Error handling
+///
+/// Returning `Err(_)` from [`SignalProvider::signals`] is
+/// reserved for genuine *infrastructure* failure (network down,
+/// catalogue 5xx, decode error). When a provider can simply
+/// produce no signals for a dependency it should return
+/// `Ok(Vec::new())` — the absence of a signal is not an error.
+/// Hosts that fan out across multiple providers (e.g.
+/// [`crate::CompositeProvider`]) translate `Err(_)` into a
+/// [`Signal::Unavailable`] so partial degradation is observable
+/// without crashing the whole evaluation.
+///
+/// Implementations live in `crates/signals/<id>/` for the
+/// built-in providers; third-party providers may live anywhere.
 #[async_trait::async_trait]
 pub trait SignalProvider: Send + Sync {
+    /// Stable identifier, used for audit logs and cache keys.
+    /// Conventionally kebab- or snake-case; must remain
+    /// constant across runs of the same provider version.
     fn id(&self) -> &'static str;
+    /// Returns `true` iff this provider can produce signals for
+    /// the given dependency. Called frequently; keep cheap.
     fn supports(&self, dep: &ResolvedDependency) -> bool;
+    /// Produces signals for a single dependency. See the trait-
+    /// level docs on error handling — `Ok(vec![])` is the right
+    /// answer for "I have nothing to say"; `Err(_)` is reserved
+    /// for infrastructure failure.
     async fn signals(&self, dep: &ResolvedDependency) -> Result<Vec<Signal>, SignalError>;
 }
 

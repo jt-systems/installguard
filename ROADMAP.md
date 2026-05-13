@@ -82,14 +82,14 @@ Move beyond age into the multi-signal model from the whitepaper §7.
 
 Plug into the wider ecosystem.
 
-- ☐ OSV / GHSA provider (consume, do not produce, advisory data)
-- ☐ deps.dev provider
-- ☐ OpenSSF Scorecard provider
-- ☐ Optional Socket / Snyk Advisor providers (gated by API key)
-- ☐ Public plugin trait for third-party signal providers
-- ☐ Plugin discovery and signature verification
+- ☑ OSV / GHSA provider (consume, do not produce, advisory data)
+- ☑ deps.dev provider
+- ☑ OpenSSF Scorecard provider
+- ◐ Optional Socket / Snyk Advisor providers (gated by API key) — *deferred: requires paid API keys; recommended path is opt-in community-maintained crates implementing the public `SignalProvider` trait*
+- ☑ Public plugin trait for third-party signal providers
+- ◐ Plugin discovery and signature verification — *deferred to M7+: requires dlopen / wasm runtime infrastructure and a separate signing trust root; the static `Vec<Box<dyn SignalProvider>>` composition shipped in this milestone is the supported integration path until then*
 
-**Exit criteria:** a team can add an internal threat-intel provider in a single crate without forking InstallGuard.
+**Exit criteria:** a team can add an internal threat-intel provider in a single crate without forking InstallGuard. ☑ — see `examples/minimal_provider.rs`.
 
 ---
 
