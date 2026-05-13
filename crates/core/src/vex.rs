@@ -256,6 +256,14 @@ fn summarise(r: &Reason) -> String {
         Reason::ProjectArchived { source } => {
             format!("upstream project is marked archived in {source}")
         }
+        Reason::ScorecardBelowThreshold {
+            score,
+            threshold,
+            repo,
+            source,
+        } => format!(
+            "OpenSSF Scorecard {score}/10 for {repo} is below the {threshold} threshold (per {source})"
+        ),
         Reason::TrustScoreBelowThreshold { score, threshold } => {
             format!("trust score {score}/100 is below the {threshold} threshold")
         }

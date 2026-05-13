@@ -117,6 +117,19 @@ pub enum Signal {
     /// (deferred alongside the keyless-Sigstore slice). Absence is
     /// not suspicious, but presence is a trust boost.
     ProvenanceClaimed { bundle_url: String },
+    /// OpenSSF Scorecard aggregate score for the upstream
+    /// project on a 0-10 scale (rounded to one decimal in the
+    /// upstream API; we round to nearest integer for stable
+    /// policy comparison). `repo` is the canonical
+    /// `host/owner/repo` triple the score was fetched against
+    /// (e.g. `"github.com/expressjs/express"`); kept verbatim so
+    /// audit logs can re-fetch. `source` is the catalogue
+    /// (`"openssf-scorecard"`).
+    ScorecardScore {
+        score: u8,
+        repo: String,
+        source: String,
+    },
     /// The provider could not produce signals for this dependency. Always
     /// recorded so policy can decide how to treat unknowns.
     Unavailable { provider: String, reason: String },
@@ -284,6 +297,20 @@ impl SignalSet {
                 archived,
                 source,
             } => Some((licenses.as_slice(), *archived, source.as_str())),
+            _ => None,
+        })
+    }
+
+    /// Returns the OpenSSF Scorecard signal if one was recorded.
+    /// Tuple is `(score, repo, source)`.
+    #[must_use]
+    pub fn scorecard(&self) -> Option<(u8, &str, &str)> {
+        self.signals.iter().find_map(|s| match s {
+            Signal::ScorecardScore {
+                score,
+                repo,
+                source,
+            } => Some((*score, repo.as_str(), source.as_str())),
             _ => None,
         })
     }

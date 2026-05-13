@@ -137,6 +137,13 @@ pub struct Defaults {
     /// regulated environments.
     #[serde(default)]
     pub block_archived: bool,
+    /// Minimum acceptable OpenSSF Scorecard score (0-10) for the
+    /// upstream repository. `0` disables the gate entirely (the
+    /// default), so the Scorecard provider is opt-in. The signal
+    /// itself still flows through [`crate::trust_score`] when
+    /// produced, regardless of whether the gate is armed.
+    #[serde(default)]
+    pub min_scorecard_score: u8,
 }
 
 /// Severity floor for the [`Reason::AdvisoryKnown`] gate.
@@ -211,6 +218,8 @@ pub struct DirectOverrides {
     pub license_allowlist: Option<Vec<String>>,
     /// Per-direct-dep override for [`Defaults::block_archived`].
     pub block_archived: Option<bool>,
+    /// Per-direct-dep override for [`Defaults::min_scorecard_score`].
+    pub min_scorecard_score: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -494,6 +503,24 @@ impl Policy {
                 });
             }
         }
+        // ── Scorecard gate ───────────────────────────────────────
+        // Only fires when both (a) policy floor is non-zero and
+        // (b) a scorecard signal was actually produced. Catalogue
+        // silence is not punished here; the broader trust score is
+        // the place that absorbs uncertainty.
+        let scorecard_floor = self.min_scorecard_score_for(dep);
+        if scorecard_floor > 0 {
+            if let Some((score, repo, source)) = signals.scorecard() {
+                if score < scorecard_floor {
+                    reasons.push(Reason::ScorecardBelowThreshold {
+                        score,
+                        threshold: scorecard_floor,
+                        repo: repo.to_string(),
+                        source: source.to_string(),
+                    });
+                }
+            }
+        }
         // ── Cumulative trust score ───────────────────────────────
         // Runs last so it sees every signal that the providers
         // produced. The score itself is logged on the dependency
@@ -669,6 +696,16 @@ impl Policy {
                 .unwrap_or(self.defaults.block_archived)
         } else {
             self.defaults.block_archived
+        }
+    }
+
+    fn min_scorecard_score_for(&self, dep: &ResolvedDependency) -> u8 {
+        if dep.direct {
+            self.direct
+                .min_scorecard_score
+                .unwrap_or(self.defaults.min_scorecard_score)
+        } else {
+            self.defaults.min_scorecard_score
         }
     }
 
@@ -1654,8 +1691,7 @@ mod tests {
 
     #[test]
     fn require_license_fires_only_on_empty_list() {
-        let p =
-            Policy::from_yaml("policyVersion: 1\ndefaults:\n  requireLicense: true\n").unwrap();
+        let p = Policy::from_yaml("policyVersion: 1\ndefaults:\n  requireLicense: true\n").unwrap();
         let mut empty = SignalSet::default();
         empty.push(project(&[], None));
         let d_empty = p.evaluate(
@@ -1710,8 +1746,7 @@ mod tests {
 
     #[test]
     fn block_archived_only_fires_when_archived_true() {
-        let p =
-            Policy::from_yaml("policyVersion: 1\ndefaults:\n  blockArchived: true\n").unwrap();
+        let p = Policy::from_yaml("policyVersion: 1\ndefaults:\n  blockArchived: true\n").unwrap();
         let mut archived = SignalSet::default();
         archived.push(project(&["MIT"], Some(true)));
         let d_archived = p.evaluate(
@@ -1740,5 +1775,71 @@ mod tests {
             Utc::now(),
         );
         assert!(matches!(d_unknown, Decision::Allow));
+    }
+
+    fn scorecard(score: u8) -> Signal {
+        Signal::ScorecardScore {
+            score,
+            repo: "github.com/foo/bar".into(),
+            source: "openssf-scorecard".into(),
+        }
+    }
+
+    #[test]
+    fn scorecard_gate_off_by_default() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(scorecard(1));
+        let d = p.evaluate(
+            &dep("foo", true, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Allow), "got {d:?}");
+    }
+
+    #[test]
+    fn scorecard_gate_blocks_below_floor_and_passes_at_or_above() {
+        let p = Policy::from_yaml("policyVersion: 1\ndefaults:\n  minScorecardScore: 5\n").unwrap();
+        let mut low = SignalSet::default();
+        low.push(scorecard(3));
+        let d_low = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &low,
+            Utc::now(),
+        );
+        match d_low {
+            Decision::Block { reasons } => assert!(reasons.iter().any(|r| matches!(
+                r,
+                Reason::ScorecardBelowThreshold {
+                    score: 3,
+                    threshold: 5,
+                    ..
+                }
+            ))),
+            other => panic!("expected Block, got {other:?}"),
+        }
+
+        let mut at = SignalSet::default();
+        at.push(scorecard(5));
+        let d_at = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &at,
+            Utc::now(),
+        );
+        assert!(matches!(d_at, Decision::Allow));
+    }
+
+    #[test]
+    fn scorecard_gate_silent_without_signal() {
+        // Floor armed but no scorecard signal → no reason fires.
+        let p = Policy::from_yaml("policyVersion: 1\ndefaults:\n  minScorecardScore: 7\n").unwrap();
+        let signals = SignalSet::default();
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Allow));
     }
 }

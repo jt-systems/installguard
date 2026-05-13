@@ -66,6 +66,13 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "minScorecardScore": {
+          "default": 0,
+          "description": "Minimum acceptable OpenSSF Scorecard score (0-10) for the upstream repository. `0` disables the gate entirely (the default), so the Scorecard provider is opt-in. The signal itself still flows through [`crate::trust_score`] when produced, regardless of whether the gate is armed.",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "minTrustScore": {
           "default": 0,
           "description": "Minimum aggregate trust score in `[0, 100]` (see [`crate::trust_score`]). `0` disables the check. The score is computed from the full signal set after every other detector has run; it acts as a *cumulative* gate that catches dependencies whose individual signals each look acceptable but together cross a risk budget.",
@@ -157,6 +164,16 @@
           "default": null,
           "description": "Per-direct-dep override for [`Defaults::min_maintainer_account_age_days`].",
           "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "minScorecardScore": {
+          "default": null,
+          "description": "Per-direct-dep override for [`Defaults::min_scorecard_score`].",
+          "format": "uint8",
           "minimum": 0.0,
           "type": [
             "integer",
@@ -255,6 +272,7 @@
         "licenseAllowlist": [],
         "maxAdvisorySeverity": "none",
         "minMaintainerAccountAgeDays": 0,
+        "minScorecardScore": 0,
         "minTrustScore": 0,
         "minimumReleaseAge": null,
         "requireLicense": false,
@@ -275,6 +293,7 @@
         "licenseAllowlist": null,
         "maxAdvisorySeverity": null,
         "minMaintainerAccountAgeDays": null,
+        "minScorecardScore": null,
         "minTrustScore": null,
         "minimumReleaseAge": null,
         "requireLicense": null,

@@ -10,6 +10,7 @@ members = [
     "crates/signals/npm-registry",
     "crates/signals/osv",
     "crates/signals/depsdev",
+    "crates/signals/scorecard",
 ]
 
 [workspace.package]
@@ -30,6 +31,7 @@ installguard-adapter-yarn = { path = "crates/adapters/yarn", version = "0.0.0" }
 installguard-signal-npm-registry = { path = "crates/signals/npm-registry", version = "0.0.0" }
 installguard-signal-osv = { path = "crates/signals/osv", version = "0.0.0" }
 installguard-signal-depsdev = { path = "crates/signals/depsdev", version = "0.0.0" }
+installguard-signal-scorecard = { path = "crates/signals/scorecard", version = "0.0.0" }
 installguard-cache = { path = "crates/cache", version = "0.0.0" }
 
 # External

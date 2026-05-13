@@ -98,7 +98,9 @@ pub enum Reason {
     },
     /// Policy required the dependency to declare a license but the
     /// catalogue reported none.
-    LicenseMissing { source: String },
+    LicenseMissing {
+        source: String,
+    },
     /// The catalogue's license declaration is not on the policy's
     /// allowlist. `licenses` is the verbatim list reported by the
     /// catalogue so the operator can copy it into their allowlist
@@ -108,7 +110,20 @@ pub enum Reason {
         source: String,
     },
     /// Upstream project is marked archived in the catalogue.
-    ProjectArchived { source: String },
+    ProjectArchived {
+        source: String,
+    },
+    /// OpenSSF Scorecard score for the upstream repository fell
+    /// below the configured floor. `score` is the rounded 0-10
+    /// value the catalogue returned; `threshold` is the policy
+    /// minimum; `repo` identifies the canonical repo the score
+    /// was fetched against; `source` names the catalogue.
+    ScorecardBelowThreshold {
+        score: u8,
+        threshold: u8,
+        repo: String,
+        source: String,
+    },
     /// Aggregate trust score fell below the configured floor.
     /// `score` is the computed value; `threshold` is the policy
     /// minimum. The full per-signal breakdown lives on the
@@ -148,6 +163,7 @@ impl Reason {
             Self::LicenseMissing { .. } => "license-missing",
             Self::LicenseDisallowed { .. } => "license-disallowed",
             Self::ProjectArchived { .. } => "project-archived",
+            Self::ScorecardBelowThreshold { .. } => "scorecard-below-threshold",
             Self::TrustScoreBelowThreshold { .. } => "trust-score-below-threshold",
             Self::SignalUnavailable { .. } => "signal-unavailable",
         }

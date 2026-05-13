@@ -34,6 +34,7 @@
 //! - `advisory_known` (low)       −5  (known-vulnerable, low)
 //! - `advisory_known` (unknown)  −10  (no severity recorded; conservative)
 //! - `unavailable`               −5  (provider couldn't speak)
+//! - `scorecard_score`         ±0–10 (linear from 5/10 midpoint, capped)
 //!
 //! Weights are *not* user-configurable in this slice. Per-policy
 //! weight tables are a follow-up; they belong in a separate
@@ -184,6 +185,20 @@ fn score_signal(signal: &Signal) -> (&'static str, i16, &'static str) {
             ),
         },
         Signal::Unavailable { .. } => ("unavailable", -5, "signal provider was unable to respond"),
+        Signal::ScorecardScore { score, .. } => {
+            // Scorecard reports a 0-10 aggregate. We linearly map
+            // distance from the midpoint (5) into a +/- 10 nudge so
+            // both healthy (8/10 → +6) and unhealthy (2/10 → -6)
+            // projects move the trust score, but the gate
+            // (minScorecardScore) remains the load-bearing control.
+            let delta = i32::from(*score) - 5;
+            let bounded = i16::try_from(delta.clamp(-5, 5) * 2).unwrap_or(0);
+            (
+                "scorecard_score",
+                bounded,
+                "OpenSSF Scorecard score (relative to 5/10 midpoint)",
+            )
+        }
     }
 }
 
