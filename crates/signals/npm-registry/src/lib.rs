@@ -92,6 +92,19 @@ impl SignalProvider for NpmRegistryProvider {
             .map_err(|e| SignalError::Decode(e.to_string()))?;
 
         let mut out = Vec::new();
+
+        // Name-squat check is purely local — emit before any network
+        // dependency so it surfaces even when the packument fetch
+        // later degrades to `Unavailable`.
+        if let installguard_core::name_similarity::Classification::Suspicious { kind, target } =
+            installguard_core::name_similarity::classify(&dep.name)
+        {
+            out.push(Signal::NameSquat {
+                style: kind.as_str().to_string(),
+                target,
+            });
+        }
+
         if let Some(t) = body.time.get(&dep.version) {
             out.push(Signal::PublishedAt { at: *t });
         } else {

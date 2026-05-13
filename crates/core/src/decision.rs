@@ -64,6 +64,14 @@ pub enum Reason {
         latest_version: String,
         highest_published: String,
     },
+    /// The package name is a near-miss for a popular package, by
+    /// edit-distance or confusable-codepoint folding. `style` is
+    /// `"typo"` or `"homoglyph"` (named `style` to avoid
+    /// colliding with serde's enum-tag field).
+    NameSquat {
+        style: String,
+        target: String,
+    },
     SignalUnavailable {
         provider: String,
         reason: String,
@@ -87,6 +95,7 @@ impl Reason {
             Self::SuspiciousScript { .. } => "suspicious-script",
             Self::VersionSurfaceChange { .. } => "version-surface-change",
             Self::DistTagAnomaly { .. } => "dist-tag-anomaly",
+            Self::NameSquat { .. } => "name-squat",
             Self::SignalUnavailable { .. } => "signal-unavailable",
         }
     }

@@ -228,6 +228,9 @@ fn summarise(r: &Reason) -> String {
         } => format!(
             "dist-tag `latest` points to {latest_version} but {highest_published} is published — latest moved backwards"
         ),
+        Reason::NameSquat { style, target } => {
+            format!("package name resembles `{target}` ({style}) — possible typosquat")
+        }
         Reason::SignalUnavailable { provider, reason } => {
             format!("signal provider `{provider}` unavailable: {reason}")
         }

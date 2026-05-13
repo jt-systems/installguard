@@ -292,6 +292,17 @@ impl Policy {
                 highest_published: highest.to_string(),
             });
         }
+        // ── Name squat (typo / homoglyph) ───────────────────────────────
+        // Always-on: a near-miss for a popular package is structural
+        // evidence, not a user preference. Default severity `block`;
+        // demote with `severity.name-squat: warn` for legitimate names
+        // that happen to live close to the popular list.
+        if let Some((style, target)) = signals.name_squat() {
+            reasons.push(Reason::NameSquat {
+                style: style.to_string(),
+                target: target.to_string(),
+            });
+        }
         // ── Surface unavailability so it isn't silently swallowed ───────
         for sig in &signals.signals {
             if let crate::signal::Signal::Unavailable { provider, reason } = sig {
@@ -1023,6 +1034,44 @@ mod tests {
         });
         let d = p.evaluate(
             &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Warn { .. }), "got {d:?}");
+    }
+
+    #[test]
+    fn name_squat_blocks_by_default() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::NameSquat {
+            style: "typo".into(),
+            target: "axios".into(),
+        });
+        let d = p.evaluate(
+            &dep("axois", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        match d {
+            Decision::Block { reasons } => {
+                assert_eq!(reasons.len(), 1);
+                assert_eq!(reasons[0].code(), "name-squat");
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn name_squat_demotable_to_warn() {
+        let p = Policy::from_yaml("policyVersion: 1\nseverity:\n  name-squat: warn\n").unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::NameSquat {
+            style: "homoglyph".into(),
+            target: "lodash".into(),
+        });
+        let d = p.evaluate(
+            &dep("lod\u{0430}sh", false, Source::Registry { url: "x".into() }),
             &signals,
             Utc::now(),
         );

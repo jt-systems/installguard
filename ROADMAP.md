@@ -70,7 +70,7 @@ Move beyond age into the multi-signal model from the whitepaper §7.
 - ☑ Dist-tag churn detection
 - ☑ File-set diff between versions (new `bin`, `.node`, `.wasm`, postinstall)
 - ☑ Static analysis of install scripts (high-risk patterns: `curl|sh`, base64 `eval`, env-var exfil to non-registry hosts)
-- ☐ Typosquat / homoglyph proximity check at PR time (direct deps only)
+- ☑ Typosquat / homoglyph proximity check at PR time (direct deps only)
 - ☐ Provenance attestation lookup via Rekor and verification
 - ☐ Trust-score computation with documented weights and explanation output
 

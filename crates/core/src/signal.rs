@@ -64,6 +64,14 @@ pub enum Signal {
         latest_version: String,
         highest_published: String,
     },
+    /// The package name is close-but-not-equal to a popular
+    /// package on the curated typosquat list, or uses confusable
+    /// Unicode codepoints that fold to a popular name. `style` is
+    /// `"typo"` or `"homoglyph"` (named `style` rather than `kind`
+    /// to avoid colliding with serde's enum-tag field); `target`
+    /// is the popular name it resembles. See
+    /// [`crate::name_similarity`].
+    NameSquat { style: String, target: String },
     /// The provider could not produce signals for this dependency. Always
     /// recorded so policy can decide how to treat unknowns.
     Unavailable { provider: String, reason: String },
@@ -161,6 +169,16 @@ impl SignalSet {
                 latest_version,
                 highest_published,
             } => Some((latest_version.as_str(), highest_published.as_str())),
+            _ => None,
+        })
+    }
+
+    /// Returns the name-squat signal if one was recorded.
+    /// Tuple is `(style, target)`.
+    #[must_use]
+    pub fn name_squat(&self) -> Option<(&str, &str)> {
+        self.signals.iter().find_map(|s| match s {
+            Signal::NameSquat { style, target } => Some((style.as_str(), target.as_str())),
             _ => None,
         })
     }

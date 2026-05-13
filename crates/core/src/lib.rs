@@ -13,6 +13,7 @@ pub mod decision;
 pub mod dependency;
 pub mod dsse;
 pub mod lockfile;
+pub mod name_similarity;
 pub mod policy;
 pub mod sbom;
 pub mod script_scan;
