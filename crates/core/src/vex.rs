@@ -241,6 +241,11 @@ fn summarise(r: &Reason) -> String {
         Reason::ProvenanceMissing => {
             "policy requires cryptographic provenance but none was verified".to_string()
         }
+        Reason::AdvisoryKnown {
+            id,
+            severity,
+            source,
+        } => format!("advisory {id} ({severity}) reported by {source}"),
         Reason::TrustScoreBelowThreshold { score, threshold } => {
             format!("trust score {score}/100 is below the {threshold} threshold")
         }

@@ -2,6 +2,18 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
+    "AdvisorySeverity": {
+      "description": "Severity floor for the [`Reason::AdvisoryKnown`] gate.\n\nSeverities form a total order; setting the floor at `high` means any advisory of `high` *or* `critical` fires the gate. `none` disables the gate entirely — advisories are still recorded as signals but are never promoted to reasons.\n\n`unknown` is a separate sentinel for advisories whose source did not record a severity. We treat it as below `low` so an operator who sets the floor to `low` does NOT accidentally block on every unrecorded-severity advisory.",
+      "enum": [
+        "none",
+        "unknown",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "type": "string"
+    },
     "Defaults": {
       "additionalProperties": false,
       "properties": {
@@ -24,6 +36,15 @@
           "default": false,
           "description": "Emit a [`Reason::DeprecatedVersion`] when the registry reports the resolved version as deprecated. Default severity is `block`; many projects will want `severity.deprecated-version: warn` during a clean-up rollout.",
           "type": "boolean"
+        },
+        "maxAdvisorySeverity": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AdvisorySeverity"
+            }
+          ],
+          "default": "none",
+          "description": "Lowest advisory severity that should fire [`Reason::AdvisoryKnown`]. Advisories below this floor are recorded on the dependency for visibility but do not block. Defaults to [`AdvisorySeverity::None`] (off) so adopting the OSV provider is opt-in. Recommended starting point: `maxAdvisorySeverity: high`."
         },
         "minMaintainerAccountAgeDays": {
           "default": 0,
@@ -82,6 +103,18 @@
             "boolean",
             "null"
           ]
+        },
+        "maxAdvisorySeverity": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdvisorySeverity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-direct-dep override for [`Defaults::max_advisory_severity`]."
         },
         "minMaintainerAccountAgeDays": {
           "default": null,
@@ -173,6 +206,7 @@
         "detectPublisherChange": false,
         "detectVersionSurfaceChange": false,
         "flagDeprecated": false,
+        "maxAdvisorySeverity": "none",
         "minMaintainerAccountAgeDays": 0,
         "minTrustScore": 0,
         "minimumReleaseAge": null,
@@ -189,6 +223,7 @@
         "detectPublisherChange": null,
         "detectVersionSurfaceChange": null,
         "flagDeprecated": null,
+        "maxAdvisorySeverity": null,
         "minMaintainerAccountAgeDays": null,
         "minTrustScore": null,
         "minimumReleaseAge": null,

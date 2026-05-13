@@ -79,6 +79,22 @@ pub enum Signal {
     /// account creation and version publication; the policy layer
     /// decides whether `age_days < threshold_days` is actionable.
     MaintainerNewAccount { account: String, age_days: u32 },
+    /// A published security advisory matches this exact dependency
+    /// version. One signal per advisory; multiple advisories on
+    /// the same package produce multiple signals so audit logs
+    /// retain the full set. `id` is the canonical identifier in
+    /// `<source>:<id>` form (e.g. `"OSV:GHSA-xxxx-xxxx-xxxx"`),
+    /// `severity` is the lowercased CVSS bucket
+    /// (`low|medium|high|critical|unknown`), `summary` is the
+    /// short human-readable headline straight from the advisory,
+    /// and `source` names the provider that produced it (so
+    /// downstream UIs can group / dedupe by source).
+    AdvisoryKnown {
+        id: String,
+        severity: String,
+        summary: String,
+        source: String,
+    },
     /// The package version was published with npm provenance and
     /// the in-toto subject digest in the DSSE bundle matches the
     /// tarball's `dist.integrity` hash. This is a *structural*
@@ -219,6 +235,30 @@ impl SignalSet {
             Signal::ProvenanceClaimed { bundle_url } => Some(bundle_url.as_str()),
             _ => None,
         })
+    }
+
+    /// Returns every advisory signal recorded for this dependency,
+    /// in the order the provider produced them. Empty when no
+    /// advisory matches.
+    #[must_use]
+    pub fn advisories(&self) -> Vec<(&str, &str, &str, &str)> {
+        self.signals
+            .iter()
+            .filter_map(|s| match s {
+                Signal::AdvisoryKnown {
+                    id,
+                    severity,
+                    summary,
+                    source,
+                } => Some((
+                    id.as_str(),
+                    severity.as_str(),
+                    summary.as_str(),
+                    source.as_str(),
+                )),
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn push(&mut self, signal: Signal) {

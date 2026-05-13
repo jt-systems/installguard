@@ -108,6 +108,57 @@ pub struct Defaults {
     /// look acceptable but together cross a risk budget.
     #[serde(default)]
     pub min_trust_score: u8,
+    /// Lowest advisory severity that should fire
+    /// [`Reason::AdvisoryKnown`]. Advisories below this floor are
+    /// recorded on the dependency for visibility but do not block.
+    /// Defaults to [`AdvisorySeverity::None`] (off) so adopting
+    /// the OSV provider is opt-in. Recommended starting point:
+    /// `maxAdvisorySeverity: high`.
+    #[serde(default)]
+    pub max_advisory_severity: AdvisorySeverity,
+}
+
+/// Severity floor for the [`Reason::AdvisoryKnown`] gate.
+///
+/// Severities form a total order; setting the floor at `high`
+/// means any advisory of `high` *or* `critical` fires the gate.
+/// `none` disables the gate entirely — advisories are still
+/// recorded as signals but are never promoted to reasons.
+///
+/// `unknown` is a separate sentinel for advisories whose source
+/// did not record a severity. We treat it as below `low` so an
+/// operator who sets the floor to `low` does NOT accidentally
+/// block on every unrecorded-severity advisory.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum AdvisorySeverity {
+    #[default]
+    None,
+    Unknown,
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl AdvisorySeverity {
+    /// Parses the lowercased severity string carried on a
+    /// [`crate::signal::Signal::AdvisoryKnown`] signal. Anything
+    /// that doesn't match a known bucket maps to
+    /// [`AdvisorySeverity::Unknown`] — we never silently drop an
+    /// advisory just because its source spelled the bucket weirdly.
+    #[must_use]
+    pub fn from_signal(s: &str) -> Self {
+        match s {
+            "low" => Self::Low,
+            "medium" | "moderate" => Self::Medium,
+            "high" => Self::High,
+            "critical" => Self::Critical,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
@@ -129,6 +180,8 @@ pub struct DirectOverrides {
     pub require_provenance: Option<bool>,
     /// Per-direct-dep override for [`Defaults::min_trust_score`].
     pub min_trust_score: Option<u8>,
+    /// Per-direct-dep override for [`Defaults::max_advisory_severity`].
+    pub max_advisory_severity: Option<AdvisorySeverity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -360,6 +413,23 @@ impl Policy {
         if self.require_provenance_for(dep) && signals.provenance_claimed().is_none() {
             reasons.push(Reason::ProvenanceMissing);
         }
+        // ── Known security advisories ────────────────────────────
+        // Every AdvisoryKnown signal at or above the configured
+        // floor becomes its own Reason. We emit one Reason per
+        // advisory so audit logs and VEX exports can carry the
+        // exact identifier list, not just a count.
+        let floor = self.max_advisory_severity_for(dep);
+        if floor != AdvisorySeverity::None {
+            for (id, severity, _summary, source) in signals.advisories() {
+                if AdvisorySeverity::from_signal(severity) >= floor {
+                    reasons.push(Reason::AdvisoryKnown {
+                        id: id.to_string(),
+                        severity: severity.to_string(),
+                        source: source.to_string(),
+                    });
+                }
+            }
+        }
         // ── Cumulative trust score ───────────────────────────────
         // Runs last so it sees every signal that the providers
         // produced. The score itself is logged on the dependency
@@ -494,6 +564,16 @@ impl Policy {
                 .unwrap_or(self.defaults.min_trust_score)
         } else {
             self.defaults.min_trust_score
+        }
+    }
+
+    fn max_advisory_severity_for(&self, dep: &ResolvedDependency) -> AdvisorySeverity {
+        if dep.direct {
+            self.direct
+                .max_advisory_severity
+                .unwrap_or(self.defaults.max_advisory_severity)
+        } else {
+            self.defaults.max_advisory_severity
         }
     }
 
@@ -1378,5 +1458,81 @@ mod tests {
                 .iter()
                 .all(|r| r.code() != "trust-score-below-threshold"));
         }
+    }
+
+    fn advisory(severity: &str) -> Signal {
+        Signal::AdvisoryKnown {
+            id: format!("OSV:GHSA-{severity}-test"),
+            severity: severity.to_string(),
+            summary: "test advisory".into(),
+            source: "osv".into(),
+        }
+    }
+
+    #[test]
+    fn advisory_gate_off_by_default() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(advisory("critical"));
+        let d = p.evaluate(
+            &dep("foo", true, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        // No reason fires when the gate is off, regardless of
+        // signal severity.
+        assert!(matches!(d, Decision::Allow), "got {d:?}");
+    }
+
+    #[test]
+    fn advisory_gate_blocks_at_or_above_floor() {
+        let p = Policy::from_yaml("policyVersion: 1\ndefaults:\n  maxAdvisorySeverity: high\n")
+            .unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(advisory("high"));
+        signals.push(advisory("critical"));
+        signals.push(advisory("medium")); // below floor
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        match d {
+            Decision::Block { reasons } => {
+                let codes: Vec<&str> = reasons.iter().map(Reason::code).collect();
+                let advisory_count = codes.iter().filter(|c| **c == "advisory-known").count();
+                assert_eq!(
+                    advisory_count, 2,
+                    "expected 2 advisory reasons, got {codes:?}"
+                );
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn advisory_gate_unknown_only_fires_when_floor_is_unknown() {
+        // floor=low must NOT fire on unknown — unknown is a
+        // separate sentinel, not a synonym for low.
+        let p =
+            Policy::from_yaml("policyVersion: 1\ndefaults:\n  maxAdvisorySeverity: low\n").unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(advisory("unknown"));
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Allow), "got {d:?}");
+
+        // floor=unknown DOES catch unknown.
+        let p2 = Policy::from_yaml("policyVersion: 1\ndefaults:\n  maxAdvisorySeverity: unknown\n")
+            .unwrap();
+        let d2 = p2.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d2, Decision::Block { .. }), "got {d2:?}");
     }
 }

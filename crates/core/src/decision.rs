@@ -86,6 +86,16 @@ pub enum Reason {
     /// fetch failed, or the in-toto subject didn't match
     /// `dist.integrity`.
     ProvenanceMissing,
+    /// A published security advisory matches this dependency at
+    /// or above the policy's severity floor. `id` is the canonical
+    /// `<source>:<id>` identifier; `severity` is the bucket that
+    /// fired; `source` names the advisory database (so allowlists
+    /// can target a specific source).
+    AdvisoryKnown {
+        id: String,
+        severity: String,
+        source: String,
+    },
     /// Aggregate trust score fell below the configured floor.
     /// `score` is the computed value; `threshold` is the policy
     /// minimum. The full per-signal breakdown lives on the
@@ -121,6 +131,7 @@ impl Reason {
             Self::NameSquat { .. } => "name-squat",
             Self::MaintainerNewAccount { .. } => "maintainer-new-account",
             Self::ProvenanceMissing => "provenance-missing",
+            Self::AdvisoryKnown { .. } => "advisory-known",
             Self::TrustScoreBelowThreshold { .. } => "trust-score-below-threshold",
             Self::SignalUnavailable { .. } => "signal-unavailable",
         }

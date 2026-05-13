@@ -27,6 +27,11 @@
 //! - `name_squat`               −40  (likely impersonation)
 //! - `maintainer_new_account`   −20  (account-takeover signal)
 //! - `provenance_claimed`       +10  (structural attestation match)
+//! - `advisory_known` (critical) −50  (known-vulnerable, critical)
+//! - `advisory_known` (high)     −35  (known-vulnerable, high)
+//! - `advisory_known` (medium)   −15  (known-vulnerable, medium)
+//! - `advisory_known` (low)       −5  (known-vulnerable, low)
+//! - `advisory_known` (unknown)  −10  (no severity recorded; conservative)
 //! - `unavailable`               −5  (provider couldn't speak)
 //!
 //! Weights are *not* user-configurable in this slice. Per-policy
@@ -137,6 +142,33 @@ fn score_signal(signal: &Signal) -> (&'static str, i16, &'static str) {
             10,
             "publisher signed a provenance bundle matching this tarball",
         ),
+        Signal::AdvisoryKnown { severity, .. } => match severity.as_str() {
+            "critical" => (
+                "advisory_known",
+                -50,
+                "a critical-severity advisory matches this version",
+            ),
+            "high" => (
+                "advisory_known",
+                -35,
+                "a high-severity advisory matches this version",
+            ),
+            "medium" => (
+                "advisory_known",
+                -15,
+                "a medium-severity advisory matches this version",
+            ),
+            "low" => (
+                "advisory_known",
+                -5,
+                "a low-severity advisory matches this version",
+            ),
+            _ => (
+                "advisory_known",
+                -10,
+                "an advisory of unrecorded severity matches this version",
+            ),
+        },
         Signal::Unavailable { .. } => ("unavailable", -5, "signal provider was unable to respond"),
     }
 }
