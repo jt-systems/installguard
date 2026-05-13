@@ -4,7 +4,7 @@
 //! This crate has no I/O. All network and filesystem work lives in adapter
 //! and signal crates so the core can be unit-tested deterministically.
 
-#![doc(html_root_url = "https://docs.rs/installguard-core/0.0.0")]
+#![doc(html_root_url = "https://docs.rs/installguard-core/0.1.0")]
 
 pub mod adapter;
 pub mod attestation;

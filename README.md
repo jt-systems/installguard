@@ -4,7 +4,7 @@
 > Reduce exposure to short-lived malicious releases without disrupting developer workflow.
 
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)](ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-alpha-yellow.svg)](ROADMAP.md)
 [![Whitepaper](https://img.shields.io/badge/docs-whitepaper-informational.svg)](whitepaper.md)
 
 ---
@@ -31,17 +31,27 @@ Read the full argument in the [whitepaper](whitepaper.md).
 
 ## What it does
 
+Status legend: ☑ shipped · ◐ partial · ☐ planned
+
 | Capability | Status |
 | ---------- | :----: |
-| Minimum release-age enforcement (per environment) | planned |
-| Lifecycle script approval lists (`preinstall` / `install` / `postinstall`) | planned |
-| Exotic-source blocking (Git, tarball, GitHub shortcut) | planned |
-| Multi-signal risk scoring (publisher change, 2FA, file-set diff, dist-tag churn) | planned |
-| PR annotations (GitHub & GitLab) | planned |
-| Deterministic decision lockfile + signed in-toto attestation | planned |
-| Sandboxed install-script execution | planned |
-| Registry-proxy enforcement (Verdaccio / Artifactory / Nexus) | planned |
-| Multi-ecosystem support (npm first, then PyPI, crates.io, Go, RubyGems, …) | planned |
+| Lockfile adapters: `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock` (Berry) | ☑ |
+| Minimum release-age enforcement (per environment, with direct-dep overrides) | ☑ |
+| Lifecycle script approval lists (`preinstall` / `install` / `postinstall`) | ☑ |
+| Exotic-source blocking (Git, tarball, GitHub shortcut) | ☑ |
+| Multi-signal detection: publisher change, deprecation, dist-tag churn, file-set diff, account age, typosquat / homoglyph, suspicious-script static analysis | ☑ |
+| Trust-score computation with per-signal contribution breakdown | ☑ |
+| External signal providers: OSV/GHSA advisories, deps.dev project metadata, OpenSSF Scorecard | ☑ |
+| Public `SignalProvider` trait for third-party providers (see [`crates/core/examples/minimal_provider.rs`](crates/core/examples/minimal_provider.rs)) | ☑ |
+| PR annotations (GitHub Action, GitLab MR widget) + per-PR risk summary | ☑ |
+| Deterministic `installguard.lock` + in-toto attestation (`policy-evaluation/v1`) | ☑ |
+| CycloneDX SBOM export with policy-decision properties + per-package VEX | ☑ |
+| `--frozen` offline re-verification against a recorded snapshot | ☑ |
+| Maintainer 2FA status check | ◐ deferred (registry doesn't expose it unauthenticated) |
+| Sigstore signing (cosign keyless / KMS) for attestations | ◐ structural provenance match shipped; full Fulcio/Rekor verification deferred |
+| Sandboxed install-script execution | ☐ planned (M5) |
+| Registry-proxy enforcement (Verdaccio / Artifactory / Nexus) | ☐ planned (M6) |
+| Multi-ecosystem support (PyPI, crates.io, Go, RubyGems, …) | ☐ planned (M7) |
 
 See the [roadmap](ROADMAP.md) for milestones and the [design document](DESIGN.md) for the technical scope.
 
@@ -61,11 +71,11 @@ Comparison table in [whitepaper §17](whitepaper.md#17-comparison-with-existing-
 
 ## Quick start
 
-> **Pre-alpha — no releases yet.** This section describes the intended UX.
+> **Alpha — no tagged releases yet.** Build from source while M5+ stabilises packaging.
 
 ```bash
-# Install (planned)
-brew install installguard
+# Build from source (Rust 1.86+)
+cargo install --path crates/cli
 
 # Initialise a baseline policy
 installguard init
@@ -75,6 +85,15 @@ installguard scan
 
 # In CI: hard-fail on policy violations and emit an attestation
 installguard ci --attestation installguard.intoto.jsonl
+
+# Air-gapped CI: re-verify offline against a recorded snapshot
+installguard ci --frozen
+```
+
+External signal providers (OSV, deps.dev, OpenSSF Scorecard) are on by default and individually opt-out for offline runs:
+
+```bash
+installguard scan --no-osv --no-deps-dev --no-scorecard
 ```
 
 Example policy (`installguard.yaml`):
@@ -85,6 +104,17 @@ policyVersion: 1
 defaults:
   minimumReleaseAge: 1440        # minutes (24h)
   blockExoticSubdeps: true
+  detectPublisherChange: true
+  flagDeprecated: true
+  detectVersionSurfaceChange: true
+  minMaintainerAccountAgeDays: 30
+  requireProvenance: false        # opt-in once your supply chain emits it
+  maxAdvisorySeverity: high       # OSV / GHSA gate
+  requireLicense: true            # deps.dev gate
+  licenseAllowlist: [MIT, Apache-2.0, BSD-3-Clause, ISC]
+  blockArchived: true
+  minScorecardScore: 5            # OpenSSF Scorecard 0-10
+  minTrustScore: 60
 
 scripts:
   policy: deny-by-default
@@ -92,7 +122,7 @@ scripts:
 
 direct:
   minimumReleaseAge: 4320         # stricter for direct deps
-  flagPublisherChange: warn
+  detectPublisherChange: true
 ```
 
 Full DSL in [DESIGN.md §4](DESIGN.md#4-policy-dsl). More examples in `examples/policies/` (coming soon).
@@ -120,7 +150,7 @@ If anything fails policy, scripts never run.
 
 ## Project status
 
-InstallGuard is in **pre-alpha**. The whitepaper, design and roadmap are stable enough to build against; the implementation is just getting underway. Milestone 0 (foundations) is the current focus — see [ROADMAP.md](ROADMAP.md#milestone-0--foundations).
+InstallGuard is in **alpha**. Milestones 0–4 are shipped: full lockfile coverage for the three major npm package managers, a multi-signal detection model, deterministic decisions with in-toto attestations, three external signal providers (OSV, deps.dev, OpenSSF Scorecard), and a public `SignalProvider` trait for third-party providers. The next focus areas are sandboxed script execution (M5) and registry-proxy enforcement (M6) — see [ROADMAP.md](ROADMAP.md).
 
 If you're interested in early adoption, threat-model review, real-world lockfiles for adapter testing, or contributing rule ideas, please open an issue.
 
@@ -147,11 +177,12 @@ If you're interested in early adoption, threat-model review, real-world lockfile
 
 ## Contributing
 
-Contribution guidelines and a `CONTRIBUTING.md` will land alongside the Milestone 0 scaffold. In the meantime:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 - Issues and discussion are welcome.
 - Sanitised real-world lockfiles for adapter golden tests are particularly useful.
-- Security-relevant reports: please follow the (forthcoming) `SECURITY.md` rather than opening a public issue.
+- Third-party signal providers: implement the [`SignalProvider`](crates/core/src/signal.rs) trait — see [`crates/core/examples/minimal_provider.rs`](crates/core/examples/minimal_provider.rs) for a ~30-line worked example.
+- Security-relevant reports: please follow [SECURITY.md](SECURITY.md) rather than opening a public issue.
 
 ---
 
