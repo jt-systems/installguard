@@ -1,0 +1,27 @@
+# Pre-commit hooks for InstallGuard.
+# https://pre-commit.com
+#
+# Usage in a consumer repo's `.pre-commit-config.yaml`:
+#
+#   repos:
+#     - repo: https://github.com/installguard/installguard
+#       rev: v0.1.0          # any tag, branch, or SHA
+#       hooks:
+#         - id: installguard
+#
+# The hook only runs when a lockfile changes (see `files:`), so day-to-day
+# commits aren't slowed down. It runs `installguard scan` against the
+# project root and fails the commit on any block decision.
+
+- id: installguard
+  name: InstallGuard policy scan
+  description: >-
+    Scan changed lockfiles against the project's installguard.yaml policy.
+    Blocks the commit on policy violations; warnings do not block.
+  entry: installguard scan --format human
+  language: rust
+  pass_filenames: false
+  files: '^(.*/)?(package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$'
+  # The CLI binary is `installguard`; the package is `installguard` too.
+  # `language: rust` will `cargo install --locked` it on first use and
+  # cache the binary in pre-commit's environment store.

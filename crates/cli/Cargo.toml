@@ -1,0 +1,32 @@
+[package]
+name = "installguard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "InstallGuard — dependency freshness & install-script governance."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "installguard"
+path = "src/main.rs"
+
+[dependencies]
+installguard-core = { workspace = true }
+installguard-adapter-npm = { workspace = true }
+installguard-adapter-pnpm = { workspace = true }
+installguard-adapter-yarn = { workspace = true }
+installguard-signal-npm-registry = { workspace = true }
+installguard-cache = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+futures = { workspace = true }
+dirs = "5.0"

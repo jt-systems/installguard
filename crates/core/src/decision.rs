@@ -1,0 +1,84 @@
+//! Decision model emitted by the policy engine for one dependency.
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// Structured rationale for a non-`Allow` decision. Free-form strings are
+/// deliberately disallowed so audit logs and `installguard.lock` remain
+/// machine-readable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum Reason {
+    ReleaseAgeBelowThreshold {
+        observed_minutes: i64,
+        required_minutes: i64,
+    },
+    ExoticSource {
+        kind: String,
+    },
+    DisallowedLifecycleScript {
+        script: String,
+    },
+    /// Lifecycle script is present in the package but the project is
+    /// installing with `--ignore-scripts`, so the script will not run
+    /// during install. A future `npm rebuild` would still execute it.
+    LifecycleScriptIgnored {
+        script: String,
+    },
+    PublishedAtUnknown,
+    SignalUnavailable {
+        provider: String,
+        reason: String,
+    },
+}
+
+impl Reason {
+    /// Stable kebab-case identifier used to key into the policy's
+    /// `severity` map. Matches the serde `code` tag (snake_case) converted
+    /// to kebab-case so YAML keys read naturally.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::ReleaseAgeBelowThreshold { .. } => "release-age-below-threshold",
+            Self::ExoticSource { .. } => "exotic-source",
+            Self::DisallowedLifecycleScript { .. } => "disallowed-lifecycle-script",
+            Self::LifecycleScriptIgnored { .. } => "lifecycle-script-ignored",
+            Self::PublishedAtUnknown => "published-at-unknown",
+            Self::SignalUnavailable { .. } => "signal-unavailable",
+        }
+    }
+}
+
+/// Severity assigned to a `Reason` by the policy. `Allow` suppresses the
+/// reason entirely; `Warn` records it but does not fail; `Block` fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum Severity {
+    Allow,
+    Warn,
+    Block,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum Decision {
+    Allow,
+    Warn { reasons: Vec<Reason> },
+    Block { reasons: Vec<Reason> },
+}
+
+impl Decision {
+    #[must_use]
+    pub fn is_block(&self) -> bool {
+        matches!(self, Self::Block { .. })
+    }
+
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Warn { .. } => "warn",
+            Self::Block { .. } => "block",
+        }
+    }
+}

@@ -1,0 +1,29 @@
+# Example: drop this file at `.github/workflows/installguard.yml` in any
+# JS/TS repo to gate PRs on InstallGuard policy.
+name: InstallGuard
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  installguard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # required for the sticky risk-summary comment
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: installguard/installguard/.github/actions/installguard@v1
+        with:
+          path: .
+          # policy: installguard.yaml   # default
+          summary-file: installguard-summary.json
+          # max-warn: 0                 # uncomment to fail on any warning
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installguard-summary
+          path: installguard-summary.json

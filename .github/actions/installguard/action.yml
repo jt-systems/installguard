@@ -1,0 +1,260 @@
+name: InstallGuard
+description: >
+  Evaluate a JS/TS project's lockfile against an InstallGuard policy and emit
+  warning/error annotations on the pull request. Fails the job on any block.
+author: InstallGuard contributors
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  path:
+    description: Project root containing the lockfile.
+    required: false
+    default: "."
+  policy:
+    description: Path to the policy file. Defaults to `<path>/installguard.yaml`.
+    required: false
+    default: ""
+  summary-file:
+    description: Optional path to write the JSON summary artifact.
+    required: false
+    default: ""
+  max-warn:
+    description: Fail the job if more than this many warnings are produced.
+    required: false
+    default: ""
+  no-cache:
+    description: Disable the on-disk signal cache.
+    required: false
+    default: "false"
+  concurrency:
+    description: Maximum concurrent registry requests.
+    required: false
+    default: "16"
+  ignore-scripts:
+    description: >-
+      Treat the project as if `npm install --ignore-scripts` will be used.
+      Lifecycle-script policy violations are demoted to warnings.
+    required: false
+    default: "false"
+  comment-on-pr:
+    description: >-
+      Post (or update) a sticky summary comment on the pull request. Requires
+      `pull-requests: write` permission on the workflow's `GITHUB_TOKEN`.
+      Has no effect outside of `pull_request` / `pull_request_target` events.
+    required: false
+    default: "true"
+  github-token:
+    description: >-
+      Token used to post the PR comment. Defaults to the workflow's
+      `GITHUB_TOKEN` and only needs `pull-requests: write`.
+    required: false
+    default: ${{ github.token }}
+  version:
+    description: >
+      Git ref (tag, branch, or SHA) of InstallGuard to install. Defaults to the
+      ref this action was loaded from (`github.action_ref`), which keeps the
+      tool version in lock-step with the action version.
+    required: false
+    default: ""
+  source-repo:
+    description: >
+      `owner/repo` to install InstallGuard from. Defaults to the action's own
+      repository, so users on `installguard/installguard@v1` get the matching
+      binary automatically.
+    required: false
+    default: ""
+
+outputs:
+  summary-file:
+    description: Path to the JSON summary file, if `summary-file` was set.
+    value: ${{ inputs.summary-file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve install source
+      id: src
+      shell: bash
+      env:
+        IN_VERSION: ${{ inputs.version }}
+        IN_REPO: ${{ inputs.source-repo }}
+        ACTION_REF: ${{ github.action_ref }}
+        ACTION_REPO: ${{ github.action_repository }}
+      run: |
+        set -euo pipefail
+        repo="${IN_REPO:-${ACTION_REPO:-installguard/installguard}}"
+        ref="${IN_VERSION:-${ACTION_REF:-main}}"
+        echo "repo=$repo" >> "$GITHUB_OUTPUT"
+        echo "ref=$ref"   >> "$GITHUB_OUTPUT"
+        echo "Installing installguard from https://github.com/$repo @ $ref"
+
+    - name: Cache cargo install
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/installguard
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: installguard-${{ runner.os }}-${{ steps.src.outputs.repo }}-${{ steps.src.outputs.ref }}
+
+    - name: Install InstallGuard
+      shell: bash
+      env:
+        REPO: ${{ steps.src.outputs.repo }}
+        REF: ${{ steps.src.outputs.ref }}
+      run: |
+        set -euo pipefail
+        if command -v installguard >/dev/null 2>&1; then
+          echo "installguard already on PATH: $(installguard --version || true)"
+          exit 0
+        fi
+        # `--locked` keeps lockfile-pinned dependency versions; safer in CI.
+        cargo install --locked \
+          --git "https://github.com/${REPO}.git" \
+          --rev "${REF}" \
+          --bin installguard \
+          installguard \
+          || cargo install --locked \
+              --git "https://github.com/${REPO}.git" \
+              --branch "${REF}" \
+              --bin installguard \
+              installguard
+
+    - name: Run installguard ci
+      id: run
+      shell: bash
+      env:
+        IG_PATH: ${{ inputs.path }}
+        IG_POLICY: ${{ inputs.policy }}
+        IG_SUMMARY: ${{ inputs.summary-file }}
+        IG_MAX_WARN: ${{ inputs.max-warn }}
+        IG_NO_CACHE: ${{ inputs.no-cache }}
+        IG_CONCURRENCY: ${{ inputs.concurrency }}
+        IG_IGNORE_SCRIPTS: ${{ inputs.ignore-scripts }}
+      run: |
+        set -uo pipefail
+        # Always emit a JSON summary internally so the comment step has
+        # something to render. If the user requested their own copy, mirror
+        # to that path afterwards.
+        internal_summary="${RUNNER_TEMP:-/tmp}/installguard-summary.json"
+        args=(ci --path "$IG_PATH" --concurrency "$IG_CONCURRENCY" --summary-file "$internal_summary")
+        [[ -n "$IG_POLICY"   ]] && args+=(--policy "$IG_POLICY")
+        [[ -n "$IG_MAX_WARN" ]] && args+=(--max-warn "$IG_MAX_WARN")
+        [[ "$IG_NO_CACHE"        == "true" ]] && args+=(--no-cache)
+        [[ "$IG_IGNORE_SCRIPTS"  == "true" ]] && args+=(--ignore-scripts)
+        set +e
+        installguard "${args[@]}"
+        rc=$?
+        set -e
+        if [[ -n "$IG_SUMMARY" && -f "$internal_summary" ]]; then
+          mkdir -p "$(dirname "$IG_SUMMARY")"
+          cp "$internal_summary" "$IG_SUMMARY"
+        fi
+        echo "summary=$internal_summary" >> "$GITHUB_OUTPUT"
+        echo "exit-code=$rc"             >> "$GITHUB_OUTPUT"
+        # Defer non-zero exit until *after* the comment step has had a
+        # chance to run via `if: always()`.
+        exit 0
+
+    - name: Post PR risk-summary comment
+      # Skip outside PR contexts and when the user has opted out.
+      if: >-
+        always()
+        && inputs.comment-on-pr == 'true'
+        && (github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+        && github.event.pull_request.number != ''
+      uses: actions/github-script@v7
+      env:
+        IG_SUMMARY_PATH: ${{ steps.run.outputs.summary }}
+        IG_EXIT_CODE: ${{ steps.run.outputs.exit-code }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          const path = process.env.IG_SUMMARY_PATH;
+          const exitCode = process.env.IG_EXIT_CODE || '0';
+          const MARKER = '<!-- installguard-summary -->';
+
+          if (!path || !fs.existsSync(path)) {
+            core.warning(`installguard summary not found at ${path}; skipping PR comment`);
+            return;
+          }
+          const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const s = data.summary || { total: 0, allow: 0, warn: 0, block: 0 };
+          const decisions = Array.isArray(data.decisions) ? data.decisions : [];
+          const icon = s.block > 0 ? ':no_entry:' : (s.warn > 0 ? ':warning:' : ':white_check_mark:');
+          const verdict = s.block > 0 ? 'BLOCKED' : (s.warn > 0 ? 'Warnings' : 'Clean');
+
+          const fmtReason = (r) => {
+            switch (r.code) {
+              case 'release_age_below_threshold':
+                return `release too new (${r.age_seconds}s < ${r.threshold_seconds}s)`;
+              case 'disallowed_lifecycle_script':
+                return `disallowed script: \`${r.script}\``;
+              case 'lifecycle_script_ignored':
+                return `script will be skipped: \`${r.script}\``;
+              case 'exotic_source':
+                return `exotic source: ${r.kind}`;
+              case 'published_at_unknown':
+                return 'release date unknown';
+              case 'signal_unavailable':
+                return `signal unavailable: ${r.signal || ''}`;
+              default:
+                return r.code || 'unknown';
+            }
+          };
+
+          const flagged = decisions
+            .filter(d => d.decision === 'block' || d.decision === 'warn')
+            .slice(0, 50);
+
+          let body = `${MARKER}\n## ${icon} InstallGuard \u2014 ${verdict}\n\n`;
+          body += `| Total | Allow | Warn | Block |\n|---:|---:|---:|---:|\n`;
+          body += `| ${s.total} | ${s.allow} | ${s.warn} | **${s.block}** |\n\n`;
+          if (flagged.length > 0) {
+            body += `### Flagged packages\n\n`;
+            body += `| Decision | Package | Reason |\n|---|---|---|\n`;
+            for (const d of flagged) {
+              const reasons = ((d.details && d.details.reasons) || [])
+                .map(fmtReason).join('; ') || '(no reason)';
+              body += `| ${d.decision.toUpperCase()} | \`${d.name}@${d.version}\` | ${reasons} |\n`;
+            }
+            const flaggedTotal = decisions.filter(d => d.decision !== 'allow').length;
+            if (flaggedTotal > flagged.length) {
+              body += `\n_…and ${flaggedTotal - flagged.length} more (truncated)._\n`;
+            }
+          } else {
+            body += `_All ${s.total} dependencies passed policy._\n`;
+          }
+          body += `\n<sub>schema v${data.schemaVersion || 1} \u00b7 exit ${exitCode} \u00b7 commit ${context.sha.slice(0,7)}</sub>`;
+
+          const { owner, repo } = context.repo;
+          const issue_number = context.payload.pull_request.number;
+
+          // Look for an existing sticky comment.
+          const existing = await github.paginate(
+            github.rest.issues.listComments,
+            { owner, repo, issue_number, per_page: 100 },
+          );
+          const prior = existing.find(c => c.body && c.body.includes(MARKER));
+          if (prior) {
+            await github.rest.issues.updateComment({ owner, repo, comment_id: prior.id, body });
+            core.info(`Updated sticky comment #${prior.id}`);
+          } else {
+            const created = await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            core.info(`Created sticky comment #${created.data.id}`);
+          }
+
+    - name: Surface installguard exit code
+      if: always()
+      shell: bash
+      env:
+        RC: ${{ steps.run.outputs.exit-code }}
+      run: |
+        rc="${RC:-0}"
+        if [[ "$rc" != "0" ]]; then
+          echo "installguard ci exited with code $rc" >&2
+          exit "$rc"
+        fi

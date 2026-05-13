@@ -1,0 +1,130 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "Defaults": {
+      "additionalProperties": false,
+      "properties": {
+        "blockExoticSubdeps": {
+          "default": false,
+          "description": "Block dependencies whose source is not a registry or workspace.",
+          "type": "boolean"
+        },
+        "minimumReleaseAge": {
+          "default": null,
+          "description": "Minimum release age in minutes. `0` disables the check.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DirectOverrides": {
+      "additionalProperties": false,
+      "properties": {
+        "minimumReleaseAge": {
+          "default": null,
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ScriptPolicy": {
+      "enum": [
+        "deny-by-default",
+        "allow-by-default"
+      ],
+      "type": "string"
+    },
+    "Scripts": {
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "policy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ScriptPolicy"
+            }
+          ],
+          "default": "deny-by-default"
+        }
+      },
+      "type": "object"
+    },
+    "Severity": {
+      "description": "Severity assigned to a `Reason` by the policy. `Allow` suppresses the reason entirely; `Warn` records it but does not fail; `Block` fails.",
+      "enum": [
+        "allow",
+        "warn",
+        "block"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "Policy DSL for InstallGuard. See DESIGN.md §4 for full semantics.",
+  "properties": {
+    "defaults": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Defaults"
+        }
+      ],
+      "default": {
+        "blockExoticSubdeps": false,
+        "minimumReleaseAge": null
+      }
+    },
+    "direct": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/DirectOverrides"
+        }
+      ],
+      "default": {
+        "minimumReleaseAge": null
+      }
+    },
+    "policyVersion": {
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "scripts": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/Scripts"
+        }
+      ],
+      "default": {
+        "allow": [],
+        "policy": "deny-by-default"
+      }
+    },
+    "severity": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Severity"
+      },
+      "default": {},
+      "description": "Per-reason severity overrides. Keys are kebab-case reason codes (e.g. `release-age-below-threshold`); values are `allow` (suppress), `warn`, or `block`. Reasons not listed keep their default severity (currently always `block`, preserving v1 semantics).",
+      "type": "object"
+    }
+  },
+  "required": [
+    "policyVersion"
+  ],
+  "title": "InstallGuard policy",
+  "type": "object"
+}

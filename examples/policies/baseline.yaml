@@ -1,0 +1,18 @@
+# Baseline policy: 24-hour quarantine on direct deps, deny install scripts
+# except for a small allowlist. A reasonable starting point — tune per repo.
+
+policyVersion: 1
+
+defaults:
+  minimumReleaseAge: 1440        # 24h, in minutes
+  blockExoticSubdeps: true
+
+direct:
+  minimumReleaseAge: 4320         # 72h for direct deps
+
+scripts:
+  policy: deny-by-default
+  allow:
+    - esbuild
+    - sharp
+    - playwright

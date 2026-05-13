@@ -1,0 +1,25 @@
+[package]
+name = "installguard-cache"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Persistent on-disk signal cache for InstallGuard."
+
+[lints]
+workspace = true
+
+[dependencies]
+installguard-core = { workspace = true }
+sled = "0.34"
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.10"
+tokio = { workspace = true }

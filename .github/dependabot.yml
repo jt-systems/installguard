@@ -1,0 +1,48 @@
+# Dependabot configuration
+#
+# Keeps GitHub Actions and (once the workspace exists) Cargo dependencies up to
+# date via automated PRs.
+#
+# Rust / Cargo updates are intentionally conservative:
+#   - weekly schedule (not daily) — reduces PR noise
+#   - open-PRs cap of 5 per ecosystem to avoid flooding reviews
+#   - dependency updates are reviewed before merge; Dependabot PRs are treated
+#     like any other supply-chain change and require the same CI pass
+
+version: 2
+
+updates:
+  # ── GitHub Actions ────────────────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: "chore(actions)"
+
+  # ── Cargo (Rust workspace) ────────────────────────────────────────────────────
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - rust
+    commit-message:
+      prefix: "chore(deps)"
+    # Group patch-level updates to reduce PR noise
+    groups:
+      patch-updates:
+        update-types:
+          - patch

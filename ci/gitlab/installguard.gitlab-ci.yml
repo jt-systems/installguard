@@ -1,0 +1,224 @@
+# InstallGuard GitLab CI template
+# ---------------------------------
+# Usage in a downstream `.gitlab-ci.yml`:
+#
+#   include:
+#     - remote: 'https://raw.githubusercontent.com/installguard/installguard/v1/ci/gitlab/installguard.gitlab-ci.yml'
+#
+#   installguard:
+#     extends: .installguard
+#     variables:
+#       INSTALLGUARD_REF: "v1"           # InstallGuard version to install
+#       # INSTALLGUARD_PATH: "."
+#       # INSTALLGUARD_POLICY: installguard.yaml
+#       # INSTALLGUARD_MAX_WARN: "0"
+#       # INSTALLGUARD_NO_CACHE: "true"
+#       # INSTALLGUARD_IGNORE_SCRIPTS: "true"
+#       # INSTALLGUARD_COMMENT_ON_MR: "false"   # disable sticky MR note
+#
+# Tokens for the MR note (only one needed):
+#   * `CI_JOB_TOKEN` is used by default. Works when the project enables
+#     "CI/CD job token allowed to access this project" (default on recent
+#     GitLab versions).
+#   * For private projects, forks, or older GitLab, set
+#     `INSTALLGUARD_GITLAB_TOKEN` to a Project/Group access token with
+#     `api` scope (CI/CD → Variables → masked + protected).
+#
+# Outputs:
+#   * `installguard-summary.json`         — full machine-readable report.
+#   * `installguard-codequality.json`     — surfaced in the MR Code Quality
+#                                            widget.
+#   * Sticky note on the MR (idempotent, identified by HTML marker).
+
+.installguard:
+  stage: test
+  image: rust:1.86
+  variables:
+    INSTALLGUARD_PATH: "."
+    INSTALLGUARD_REF: "main"
+    INSTALLGUARD_REPO_URL: "https://github.com/installguard/installguard.git"
+    INSTALLGUARD_CONCURRENCY: "16"
+    INSTALLGUARD_NO_CACHE: "false"
+    INSTALLGUARD_IGNORE_SCRIPTS: "false"
+    INSTALLGUARD_COMMENT_ON_MR: "true"
+    CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+  cache:
+    key: "installguard-$INSTALLGUARD_REF"
+    paths:
+      - .cargo/bin/installguard
+      - .cargo/registry
+      - .cargo/git
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  artifacts:
+    when: always
+    paths:
+      - installguard-summary.json
+    reports:
+      codequality: installguard-codequality.json
+    expire_in: 1 week
+  before_script:
+    - set -euo pipefail
+    - export PATH="$CARGO_HOME/bin:$PATH"
+    - command -v python3 >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq python3 >/dev/null)
+    - |
+      if ! command -v installguard >/dev/null 2>&1; then
+        echo "Installing installguard from $INSTALLGUARD_REPO_URL @ $INSTALLGUARD_REF"
+        cargo install --locked --git "$INSTALLGUARD_REPO_URL" --rev "$INSTALLGUARD_REF" --bin installguard installguard \
+          || cargo install --locked --git "$INSTALLGUARD_REPO_URL" --branch "$INSTALLGUARD_REF" --bin installguard installguard
+      fi
+      installguard --version
+  script:
+    - |
+      args=(ci --path "$INSTALLGUARD_PATH" --concurrency "$INSTALLGUARD_CONCURRENCY" --summary-file installguard-summary.json)
+      [[ -n "${INSTALLGUARD_POLICY:-}"   ]] && args+=(--policy "$INSTALLGUARD_POLICY")
+      [[ -n "${INSTALLGUARD_MAX_WARN:-}" ]] && args+=(--max-warn "$INSTALLGUARD_MAX_WARN")
+      [[ "$INSTALLGUARD_NO_CACHE"       == "true" ]] && args+=(--no-cache)
+      [[ "$INSTALLGUARD_IGNORE_SCRIPTS" == "true" ]] && args+=(--ignore-scripts)
+      set +e
+      installguard "${args[@]}"
+      ig_rc=$?
+      set -e
+      echo "$ig_rc" > installguard.rc
+  # `after_script` always runs, even when `script` failed (which it will on
+  # any block decision). That lets us post the MR note before propagating the
+  # failure exit code.
+  after_script:
+    - set -uo pipefail
+    - |
+      python3 - <<'PY'
+      import hashlib, json, os, sys, urllib.parse, urllib.request
+
+      SUMMARY = "installguard-summary.json"
+      CQ_OUT  = "installguard-codequality.json"
+      MARKER  = "<!-- installguard-summary -->"
+
+      if not os.path.exists(SUMMARY):
+          print("installguard: no summary file; skipping after_script", file=sys.stderr)
+          sys.exit(0)
+
+      with open(SUMMARY) as f:
+          data = json.load(f)
+      summary   = data.get("summary", {"total":0,"allow":0,"warn":0,"block":0})
+      decisions = data.get("decisions", [])
+      lockfile  = data.get("lockfile", "package-lock.json")
+
+      def fmt_reason(r):
+          c = r.get("code", "unknown")
+          if c == "release_age_below_threshold":
+              return f"release too new ({r.get('age_seconds')}s < {r.get('threshold_seconds')}s)"
+          if c == "disallowed_lifecycle_script":
+              return f"disallowed script: `{r.get('script')}`"
+          if c == "lifecycle_script_ignored":
+              return f"script will be skipped: `{r.get('script')}`"
+          if c == "exotic_source":
+              return f"exotic source: {r.get('kind')}"
+          if c == "published_at_unknown":
+              return "release date unknown"
+          if c == "signal_unavailable":
+              return f"signal unavailable: {r.get('signal','')}"
+          return c
+
+      # ---- Code Quality report (always) ----
+      cq = []
+      for d in decisions:
+          if d.get("decision") == "allow":
+              continue
+          severity = "blocker" if d["decision"] == "block" else "minor"
+          reasons = (d.get("details") or {}).get("reasons", [])
+          desc = "; ".join(fmt_reason(r) for r in reasons) or "policy violation"
+          fp = hashlib.sha1(f"{d.get('name')}@{d.get('version')}|{desc}".encode()).hexdigest()
+          cq.append({
+              "description": f"InstallGuard: {d.get('name')}@{d.get('version')} \u2014 {desc}",
+              "check_name": "installguard",
+              "fingerprint": fp,
+              "severity": severity,
+              "location": {"path": lockfile, "lines": {"begin": 1}},
+          })
+      with open(CQ_OUT, "w") as f:
+          json.dump(cq, f)
+
+      # ---- MR note ----
+      if os.environ.get("INSTALLGUARD_COMMENT_ON_MR") != "true":
+          sys.exit(0)
+      if os.environ.get("CI_PIPELINE_SOURCE") != "merge_request_event":
+          sys.exit(0)
+
+      pat = os.environ.get("INSTALLGUARD_GITLAB_TOKEN")
+      job = os.environ.get("CI_JOB_TOKEN")
+      token = pat or job
+      api   = os.environ.get("CI_API_V4_URL")
+      pid   = os.environ.get("CI_PROJECT_ID")
+      iid   = os.environ.get("CI_MERGE_REQUEST_IID")
+      sha   = os.environ.get("CI_COMMIT_SHORT_SHA", "")
+      if not (token and api and pid and iid):
+          print("installguard: missing GitLab API context; skipping MR note", file=sys.stderr)
+          sys.exit(0)
+
+      block = summary.get("block", 0)
+      warn  = summary.get("warn", 0)
+      allow = summary.get("allow", 0)
+      total = summary.get("total", 0)
+      if block:
+          icon, verdict = "\U0001F6AB", "BLOCKED"
+      elif warn:
+          icon, verdict = "\u26A0\uFE0F", "Warnings"
+      else:
+          icon, verdict = "\u2705", "Clean"
+
+      lines = [MARKER, f"## {icon} InstallGuard \u2014 {verdict}", ""]
+      lines += ["| Total | Allow | Warn | Block |", "|---:|---:|---:|---:|",
+                f"| {total} | {allow} | {warn} | **{block}** |", ""]
+      flagged = [d for d in decisions if d.get("decision") != "allow"]
+      shown   = flagged[:50]
+      if shown:
+          lines += ["### Flagged packages", "",
+                    "| Decision | Package | Reason |", "|---|---|---|"]
+          for d in shown:
+              reasons = (d.get("details") or {}).get("reasons", [])
+              desc = "; ".join(fmt_reason(r) for r in reasons) or "(no reason)"
+              lines.append(f"| {d['decision'].upper()} | `{d.get('name')}@{d.get('version')}` | {desc} |")
+          if len(flagged) > len(shown):
+              lines.append(f"\n_\u2026and {len(flagged)-len(shown)} more (truncated)._")
+      else:
+          lines.append(f"_All {total} dependencies passed policy._")
+      sv = data.get("schemaVersion", 1)
+      lines.append(f"\n<sub>schema v{sv} \u00b7 commit {sha}</sub>")
+      body = "\n".join(lines)
+
+      def request(method, url, payload=None):
+          req = urllib.request.Request(url, method=method)
+          # Use PRIVATE-TOKEN for PATs; JOB-TOKEN for $CI_JOB_TOKEN.
+          if pat:
+              req.add_header("PRIVATE-TOKEN", token)
+          else:
+              req.add_header("JOB-TOKEN", token)
+          req.add_header("Content-Type", "application/json")
+          data_bytes = json.dumps(payload).encode() if payload is not None else None
+          with urllib.request.urlopen(req, data=data_bytes, timeout=15) as resp:
+              return json.loads(resp.read().decode() or "null")
+
+      base = f"{api}/projects/{urllib.parse.quote_plus(pid)}/merge_requests/{iid}/notes"
+      try:
+          notes = request("GET", f"{base}?per_page=100")
+      except Exception as e:
+          print(f"installguard: failed to list notes: {e}", file=sys.stderr)
+          sys.exit(0)
+      prior = next((n for n in (notes or []) if MARKER in (n.get("body") or "")), None)
+      try:
+          if prior:
+              request("PUT", f"{base}/{prior['id']}", {"body": body})
+              print(f"installguard: updated MR note #{prior['id']}")
+          else:
+              created = request("POST", base, {"body": body})
+              print(f"installguard: created MR note #{created.get('id')}")
+      except Exception as e:
+          print(f"installguard: failed to post MR note: {e}", file=sys.stderr)
+      PY
+    - |
+      rc=$(cat installguard.rc 2>/dev/null || echo 0)
+      if [[ "$rc" != "0" ]]; then
+        echo "installguard ci exited with code $rc" >&2
+        exit "$rc"
+      fi
