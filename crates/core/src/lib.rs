@@ -14,6 +14,7 @@ pub mod lockfile;
 pub mod policy;
 pub mod sbom;
 pub mod signal;
+pub mod vex;
 
 pub use adapter::LockfileAdapter;
 pub use attestation::{Statement, PREDICATE_TYPE, STATEMENT_TYPE};

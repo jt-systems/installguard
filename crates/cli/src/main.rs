@@ -60,6 +60,10 @@ enum Command {
     /// decisions attached as `installguard:*` properties on each
     /// component.
     Sbom(SbomArgs),
+    /// Emit an OpenVEX 0.2.0 document mapping each block/warn decision
+    /// to a VEX statement. Block becomes `affected`, warn becomes
+    /// `under_investigation`; allow decisions emit no statement.
+    Vex(VexArgs),
 }
 
 /// Inputs shared by `scan` and `ci`.
@@ -183,6 +187,22 @@ struct SbomArgs {
     out: Option<PathBuf>,
 }
 
+#[derive(Debug, clap::Args)]
+struct VexArgs {
+    #[command(flatten)]
+    common: EvalArgs,
+
+    /// Output path for the VEX JSON. Defaults to
+    /// `<path>/installguard.vex.json`. Use `-` to write to stdout.
+    #[arg(long)]
+    out: Option<PathBuf>,
+
+    /// Author string written into the OpenVEX document. Defaults to
+    /// `InstallGuard`.
+    #[arg(long)]
+    author: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum OutputFormat {
     Human,
@@ -208,6 +228,7 @@ async fn main() -> ExitCode {
         Command::Verify(args) => run_verify(args).await,
         Command::Attest(args) => run_attest(args).await,
         Command::Sbom(args) => run_sbom(args).await,
+        Command::Vex(args) => run_vex(args).await,
     };
     match result {
         Ok(code) => code,
@@ -640,6 +661,46 @@ async fn run_sbom(args: SbomArgs) -> Result<ExitCode> {
             "wrote {} (CycloneDX 1.5, {} components)",
             dest.display(),
             bom.components.len(),
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+// ── `vex` subcommand ────────────────────────────────────────────────────────
+
+async fn run_vex(args: VexArgs) -> Result<ExitCode> {
+    use installguard_core::lockfile::sha256_hex;
+    use installguard_core::vex::{Vex, VexEntry, DEFAULT_AUTHOR};
+
+    let out = evaluate(&args.common).await?;
+    let entries: Vec<VexEntry<'_>> = out
+        .results
+        .iter()
+        .map(|r| VexEntry {
+            dep: &r.dep,
+            decision: &r.decision,
+        })
+        .collect();
+    let author = args.author.as_deref().unwrap_or(DEFAULT_AUTHOR);
+    let vex = Vex::build_with_author(
+        &entries,
+        &sha256_hex(&out.lockfile_bytes),
+        chrono::Utc::now(),
+        author,
+    );
+    let json = vex.to_json().context("serialising vex")?;
+
+    let dest = args
+        .out
+        .unwrap_or_else(|| args.common.path.join("installguard.vex.json"));
+    if dest.as_os_str() == "-" {
+        print!("{json}");
+    } else {
+        std::fs::write(&dest, &json).with_context(|| format!("writing vex {}", dest.display()))?;
+        eprintln!(
+            "wrote {} (OpenVEX 0.2.0, {} statements)",
+            dest.display(),
+            vex.statements.len(),
         );
     }
     Ok(ExitCode::SUCCESS)

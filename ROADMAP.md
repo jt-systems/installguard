@@ -52,7 +52,7 @@ Make decisions reproducible and provable.
 - ☐ Sigstore signing (cosign keyless and KMS)
 - ◐ `installguard verify` against a signed attestation _(unsigned-lock verify shipped; signed-attestation path depends on Sigstore wiring)_
 - ☑ CycloneDX SBOM export with policy-decision properties
-- ☐ VEX statement export per package decision
+- ☑ VEX statement export per package decision
 - ☐ Audit log sink (JSONL) with stable schema
 
 **Exit criteria:** a downstream consumer can verify "this build was governed by policy X with these decisions" without contacting any registry.

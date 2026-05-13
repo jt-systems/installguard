@@ -203,7 +203,12 @@ fn component_from(dep: &ResolvedDependency, decision: &Decision) -> Component {
     }
 }
 
-fn purl_for(dep: &ResolvedDependency) -> String {
+/// Canonical purl for a resolved dependency. `pkg:npm/<name>@<version>`
+/// for all currently-supported ecosystems; scoped names percent-encode
+/// the leading `@`. Re-used by the VEX emitter so SBOM and VEX stay
+/// referentially compatible.
+#[must_use]
+pub fn purl_for(dep: &ResolvedDependency) -> String {
     // All currently-supported ecosystems share the npm registry, so the
     // purl type is always `npm`. Revisit when we add non-npm ecosystems.
     let _ = Ecosystem::Npm;
