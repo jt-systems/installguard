@@ -4,7 +4,7 @@ This directory holds the assets needed to publish InstallGuard via a
 personal Homebrew tap. The aim is the user experience:
 
 ```sh
-brew tap jthomas/installguard
+brew tap jt-systems/installguard
 brew install installguard
 ```
 
@@ -17,14 +17,14 @@ install in the meantime.
 
 ## One-time setup (manual)
 
-1. **Create the tap repository** on GitHub: `jthomas/homebrew-installguard`.
+1. **Create the tap repository** on GitHub: `jt-systems/homebrew-installguard`.
    Homebrew discovers taps by the `homebrew-` prefix; the rest of the
    name is arbitrary.
 
 2. **Seed it with the formula template** in this directory:
 
    ```sh
-   git clone git@github.com:jthomas/homebrew-installguard.git
+   git clone git@github.com:jt-systems/homebrew-installguard.git
    cd homebrew-installguard
    mkdir -p Formula
    cp /path/to/installguard/packaging/homebrew/installguard.rb Formula/
@@ -37,16 +37,16 @@ install in the meantime.
    release will rewrite them automatically (see below).
 
 3. **Issue a fine-grained Personal Access Token** scoped only to the
-   `jthomas/homebrew-installguard` repo with `Contents: Read & write`
+   `jt-systems/homebrew-installguard` repo with `Contents: Read & write`
    permission. Add it as a secret named `HOMEBREW_TAP_TOKEN` on
-   `jthomas/installguard` (Settings → Secrets and variables → Actions).
+   `jt-systems/installguard` (Settings → Secrets and variables → Actions).
 
 4. **Tag a release**: `git tag -s v0.1.0 -m "v0.1.0" && git push --tags`.
    The release workflow will build the binary matrix, publish a GitHub
    Release with sha256 checksums, and then the new
    `homebrew-publish` job will open a PR against the tap repo bumping
    `version` and the four `sha256` values. Merge that PR and
-   `brew install jthomas/installguard/installguard` works for everyone.
+   `brew install jt-systems/installguard/installguard` works for everyone.
 
 ## Automation
 
@@ -61,7 +61,7 @@ the PAT, the job is a no-op and tagging a release does no harm.
 Once the formula is in the tap, you can dry-run it without publishing:
 
 ```sh
-brew tap jthomas/installguard
+brew tap jt-systems/installguard
 brew install --build-from-source --verbose --debug installguard  # not used here — bottle install
 brew audit --strict --new-formula installguard
 brew test installguard

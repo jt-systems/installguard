@@ -18,8 +18,8 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.86"
 license = "Apache-2.0"
-repository = "https://github.com/jthomas/installguard"
-homepage = "https://github.com/jthomas/installguard"
+repository = "https://github.com/jt-systems/installguard"
+homepage = "https://github.com/jt-systems/installguard"
 authors = ["InstallGuard contributors"]
 
 [workspace.dependencies]

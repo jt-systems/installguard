@@ -74,8 +74,8 @@ Comparison table in [whitepaper §17](whitepaper.md#17-comparison-with-existing-
 > **Alpha — `0.1.0`.** Pre-built binaries land with the first tagged release; until then both install paths build from source.
 
 ```bash
-# Homebrew (macOS, Linux) — once jthomas/homebrew-installguard is published:
-brew install jthomas/installguard/installguard
+# Homebrew (macOS, Linux) — once jt-systems/homebrew-installguard is published:
+brew install jt-systems/installguard/installguard
 
 # Or build from source (Rust 1.86+):
 cargo install --path crates/cli

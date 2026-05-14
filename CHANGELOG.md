@@ -131,5 +131,5 @@ First tagged alpha. Covers milestones M0 through M4 from
   [`.github/workflows/release.yml`](.github/workflows/release.yml) is wired
   but commented out pending a real first-release dry run.
 
-[Unreleased]: https://github.com/jthomas/installguard/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/jthomas/installguard/releases/tag/v0.1.0
+[Unreleased]: https://github.com/jt-systems/installguard/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jt-systems/installguard/releases/tag/v0.1.0
