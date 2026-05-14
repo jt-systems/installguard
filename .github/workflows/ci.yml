@@ -47,6 +47,42 @@ jobs:
           toolchain: "1.86.0"
           components: clippy, rustfmt
 
+      - name: Bypass rustup proxies
+        # The cargo/rustc/clippy/rustfmt binaries in ~/.cargo/bin are rustup
+        # proxies that shell out to `rustup run <toolchain> <tool>`. On some
+        # runner images (notably arm64 macos-latest) `rustup` itself is a
+        # symlink to `rustup-init`, which rejects the proxied subcommand and
+        # fails with "unexpected argument 'build' found". Prepending the
+        # installed toolchain's real bin directory to PATH skips the proxies
+        # entirely and is robust against future image regressions.
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Try rustc first; if its proxy is also broken on this image, fall
+          # back to globbing the rustup toolchains dir (dtolnay just installed
+          # exactly one toolchain so there is no ambiguity).
+          toolchain_bin=""
+          if sysroot="$(rustc +1.86.0 --print sysroot 2>/dev/null)"; then
+            toolchain_bin="$sysroot/bin"
+          elif sysroot="$(rustc --print sysroot 2>/dev/null)"; then
+            toolchain_bin="$sysroot/bin"
+          else
+            # Last resort: locate the installed toolchain directly.
+            for d in "$HOME"/.rustup/toolchains/1.86.0-*/bin; do
+              if [ -x "$d/cargo" ]; then
+                toolchain_bin="$d"
+                break
+              fi
+            done
+          fi
+          if [ -z "$toolchain_bin" ] || [ ! -x "$toolchain_bin/cargo" ]; then
+            echo "::error::Could not locate real cargo binary" >&2
+            exit 1
+          fi
+          echo "Using toolchain bin: $toolchain_bin"
+          ls -l "$toolchain_bin"
+          echo "$toolchain_bin" >> "$GITHUB_PATH"
+
       - name: Cache Cargo registry & build artefacts
         uses: Swatinem/rust-cache@v2
 
