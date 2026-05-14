@@ -11,6 +11,22 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.9] — 2026-05-14
+
+Registry lookup: tolerate `v`-prefixed lockfile versions. Some
+lockfiles record dependency versions with a leading `v`
+(e.g. `@upstash/redis@v1.35.1` when npm/yarn resolved against a
+GitHub release tag). The npm registry stores bare semver per the
+[npmjs.org docs](https://docs.npmjs.com/about-semantic-versioning),
+so a literal lookup of `v1.35.1` against the packument's `time`
+or `versions` map missed every time and surfaced as
+`signal-unavailable`. The provider now retries with the leading
+`v` stripped (only when followed by an ASCII digit, so package
+names like `velocity` are unaffected). The dependency continues
+to be recorded with its lockfile-fidelity version in
+`installguard.lock` and audit output — only the lookup is
+normalized.
+
 ## [0.1.8] — 2026-05-14
 
 Workspace-aware policy. Real-world monorepos (npm workspaces,

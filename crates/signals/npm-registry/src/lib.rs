@@ -134,6 +134,8 @@ impl SignalProvider for NpmRegistryProvider {
 
         if let Some(t) = body.time.get(&dep.version) {
             out.push(Signal::PublishedAt { at: *t });
+        } else if let Some(t) = lookup_version_normalized(&body.time, &dep.version) {
+            out.push(Signal::PublishedAt { at: t });
         } else {
             out.push(Signal::Unavailable {
                 provider: "npm-registry".into(),
@@ -141,7 +143,11 @@ impl SignalProvider for NpmRegistryProvider {
             });
         }
 
-        if let Some(version_meta) = body.versions.get(&dep.version) {
+        let version_meta = body
+            .versions
+            .get(&dep.version)
+            .or_else(|| lookup_version_meta_normalized(&body.versions, &dep.version));
+        if let Some(version_meta) = version_meta {
             let lifecycle: Vec<(&String, &String)> = version_meta
                 .scripts
                 .as_ref()
@@ -185,9 +191,18 @@ impl SignalProvider for NpmRegistryProvider {
         // Maintainer account age: only fetch the user record when we
         // actually know the publisher AND we know the publish time;
         // pure-helper logic is unit-tested separately.
-        if let Some(version_meta) = body.versions.get(&dep.version) {
+        if let Some(version_meta) = body
+            .versions
+            .get(&dep.version)
+            .or_else(|| lookup_version_meta_normalized(&body.versions, &dep.version))
+        {
             if let Some(account) = version_meta.npm_user.as_ref().map(|u| u.name.clone()) {
-                if let Some(published_at) = body.time.get(&dep.version).copied() {
+                if let Some(published_at) = body
+                    .time
+                    .get(&dep.version)
+                    .copied()
+                    .or_else(|| lookup_version_normalized(&body.time, &dep.version))
+                {
                     let created = self.fetch_user_created(&account).await;
                     if let Some(sig) =
                         compute_maintainer_account_signal(&account, created, published_at)
@@ -205,7 +220,11 @@ impl SignalProvider for NpmRegistryProvider {
         // Sigstore's Fulcio roots (deferred alongside keyless
         // Sigstore). Absence is silent — most npm packages do not
         // yet publish with `--provenance`.
-        if let Some(version_meta) = body.versions.get(&dep.version) {
+        if let Some(version_meta) = body
+            .versions
+            .get(&dep.version)
+            .or_else(|| lookup_version_meta_normalized(&body.versions, &dep.version))
+        {
             if let Some(dist) = version_meta.dist.as_ref() {
                 if let (Some(integrity), Some(att)) =
                     (dist.integrity.as_deref(), dist.attestations.as_ref())
@@ -552,11 +571,6 @@ fn bin_names(bin: Option<&serde_json::Value>) -> Vec<String> {
 /// non-prerelease published version. Pre-releases are excluded from
 /// the “highest” comparison because shipping `2.0.0-rc.1` while
 /// `latest=1.4.0` is normal release-train behaviour, not an attack.
-/// Detects the “`latest` moved backwards” pattern: `dist-tags.latest`
-/// resolves to a version that is strictly older than the highest
-/// non-prerelease published version. Pre-releases are excluded from
-/// the “highest” comparison because shipping `2.0.0-rc.1` while
-/// `latest=1.4.0` is normal release-train behaviour, not an attack.
 ///
 /// We only fire when the gap crosses a major-version boundary
 /// (i.e. `latest.major < highest.major`). Same-major patch / minor
@@ -699,6 +713,42 @@ struct DistAttestations {
 #[derive(Debug, Deserialize)]
 struct NpmUser {
     name: String,
+}
+
+/// Look up a version in a packument map, falling back to a
+/// leading-`v` strip if the literal key misses.
+///
+/// Some lockfiles record dependency versions with a `v` prefix
+/// (e.g. yarn classic resolved against a git tag named `v1.35.1`,
+/// or an npm install pointing at a GitHub release tag). The npm
+/// registry itself stores versions as bare semver per
+/// [npmjs.org](https://docs.npmjs.com/about-semantic-versioning),
+/// so a literal lookup of `v1.35.1` against the packument's `time`
+/// or `versions` map misses every time. We strip a single leading
+/// `v` followed by an ASCII digit and retry, so a dependency
+/// resolved as `v1.35.1` still finds the registry's `1.35.1`
+/// entry. We do not recurse — `vv1.0.0` is not a real pattern.
+/// This is purely a lookup detail; the dependency continues to
+/// be recorded with its lockfile-fidelity version in
+/// `installguard.lock` and audit output.
+fn lookup_version_normalized<V: Copy>(map: &HashMap<String, V>, version: &str) -> Option<V> {
+    strip_v_prefix(version).and_then(|v| map.get(v).copied())
+}
+
+fn lookup_version_meta_normalized<'a>(
+    map: &'a HashMap<String, VersionMeta>,
+    version: &str,
+) -> Option<&'a VersionMeta> {
+    strip_v_prefix(version).and_then(|v| map.get(v))
+}
+
+fn strip_v_prefix(version: &str) -> Option<&str> {
+    let rest = version.strip_prefix('v')?;
+    if rest.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        Some(rest)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -1131,6 +1181,30 @@ mod tests {
     fn dist_tag_anomaly_fires_across_major_boundary() {
         let p = pkmt_with_dist_tags(&["1.0.0", "1.1.0", "2.0.0"], &[("latest", "1.1.0")]);
         assert!(detect_dist_tag_anomaly(&p).is_some());
+    }
+
+    /// Lockfiles occasionally record dependency versions with a
+    /// leading `v` (e.g. `v1.35.1` when resolved against a GitHub
+    /// release tag). The npm registry stores bare semver, so a
+    /// literal lookup misses; the normalized fallback must find it.
+    #[test]
+    fn strip_v_prefix_normalizes_tag_style_versions() {
+        assert_eq!(strip_v_prefix("v1.35.1"), Some("1.35.1"));
+        assert_eq!(strip_v_prefix("v0.0.10"), Some("0.0.10"));
+        // Don't strip a `v` not followed by a digit — these are
+        // package names, not version prefixes.
+        assert_eq!(strip_v_prefix("velocity"), None);
+        assert_eq!(strip_v_prefix("1.0.0"), None);
+        assert_eq!(strip_v_prefix(""), None);
+    }
+
+    #[test]
+    fn lookup_version_normalized_falls_back_to_stripped() {
+        let mut map: HashMap<String, i32> = HashMap::new();
+        map.insert("1.35.1".into(), 42);
+        assert_eq!(lookup_version_normalized(&map, "1.35.1"), None); // direct hit handled by caller
+        assert_eq!(lookup_version_normalized(&map, "v1.35.1"), Some(42));
+        assert_eq!(lookup_version_normalized(&map, "v9.9.9"), None);
     }
 
     #[test]
