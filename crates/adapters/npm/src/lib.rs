@@ -80,7 +80,18 @@ pub fn parse_str(raw: &str) -> Result<Vec<ResolvedDependency>, AdapterError> {
         // and contains no nested `/node_modules/` segment.
         let direct = is_direct_path(&key);
 
-        let source = classify_source(entry.resolved.as_deref());
+        // Workspace member: any non-empty key that does not live under
+        // `node_modules/`. npm v3+ records workspace packages at their
+        // on-disk path (e.g. `apps/api`, `packages/utils`) with no
+        // `resolved` URL because the package is local to the repo.
+        // Treat as `Source::Workspace` so the policy can short-circuit
+        // to `Allow` rather than asking the registry for a private name
+        // and getting a 404.
+        let source = if key.starts_with("node_modules/") {
+            classify_source(entry.resolved.as_deref())
+        } else {
+            Source::Workspace
+        };
         let integrity = entry.integrity.clone().map(Integrity);
 
         out.push(ResolvedDependency {
@@ -224,6 +235,42 @@ mod tests {
             parse_str(raw),
             Err(AdapterError::UnsupportedVersion(_))
         ));
+    }
+
+    /// Real-world npm workspace shape: package-lock.json records each
+    /// workspace member at its on-disk path (no `node_modules/`
+    /// prefix, no `resolved` URL, no `link: true` flag) with the
+    /// member's name + version inline. These are first-party packages
+    /// that don't exist on the public registry; classify them as
+    /// `Source::Workspace` so policy can short-circuit to Allow.
+    #[test]
+    fn workspace_members_classified_as_workspace_source() {
+        let raw = r#"{
+            "name": "monorepo",
+            "version": "1.0.0",
+            "lockfileVersion": 3,
+            "packages": {
+                "": { "name": "monorepo", "version": "1.0.0" },
+                "apps/api": { "name": "@acme/api", "version": "0.1.0" },
+                "packages/utils": { "name": "@acme/utils", "version": "0.2.0" },
+                "node_modules/axios": {
+                    "version": "1.7.9",
+                    "resolved": "https://registry.npmjs.org/axios/-/axios-1.7.9.tgz",
+                    "integrity": "sha512-x"
+                }
+            }
+        }"#;
+        let deps = parse_str(raw).unwrap();
+        let api = deps.iter().find(|d| d.name == "@acme/api").unwrap();
+        assert!(
+            matches!(api.source, Source::Workspace),
+            "got {:?}",
+            api.source
+        );
+        let utils = deps.iter().find(|d| d.name == "@acme/utils").unwrap();
+        assert!(matches!(utils.source, Source::Workspace));
+        let axios = deps.iter().find(|d| d.name == "axios").unwrap();
+        assert!(matches!(axios.source, Source::Registry { .. }));
     }
 
     #[test]

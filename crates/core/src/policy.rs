@@ -324,6 +324,18 @@ impl Policy {
     ) -> Decision {
         let mut reasons: Vec<Reason> = Vec::new();
 
+        // ── Workspace short-circuit ─────────────────────────────────────
+        // A workspace member is first-party code: it lives in this
+        // repository, you wrote it, and it is not fetched from a
+        // registry at install time. There is nothing meaningful for
+        // any of the registry-shaped detectors below to say about it,
+        // and asking the npm registry for a private workspace name
+        // produces a 404 that surfaces as a noisy `signal-unavailable`
+        // block. Skip evaluation entirely.
+        if matches!(dep.source, crate::dependency::Source::Workspace) {
+            return Decision::Allow;
+        }
+
         // ── Exotic source ───────────────────────────────────────────────
         if self.defaults.block_exotic_subdeps && dep.source.is_exotic() {
             reasons.push(Reason::ExoticSource {
@@ -1527,6 +1539,37 @@ mod tests {
             Utc::now(),
         );
         assert!(matches!(d, Decision::Block { .. }), "got {d:?}");
+    }
+
+    /// Workspace members are first-party code; the policy must
+    /// short-circuit to Allow without consulting any signal.
+    /// Otherwise a private `@scope/name` would 404 against the
+    /// public registry and surface as a noisy
+    /// `signal-unavailable` warn.
+    #[test]
+    fn workspace_source_short_circuits_to_allow() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        // Even with a normally-blocking signal present, workspace
+        // deps are exempt — they're code we wrote, not something
+        // we resolve from a registry.
+        signals.push(Signal::Unavailable {
+            provider: "npm-registry".into(),
+            reason: "HTTP 404".into(),
+        });
+        let workspace_dep = ResolvedDependency {
+            ecosystem: Ecosystem::Npm,
+            name: "@acme/api".into(),
+            version: "0.1.0".into(),
+            integrity: None,
+            source: Source::Workspace,
+            direct: true,
+            requested_by: vec![],
+        };
+        assert!(matches!(
+            p.evaluate(&workspace_dep, &signals, Utc::now()),
+            Decision::Allow
+        ));
     }
 
     /// `attr-accept@2.2.5` shipped in real lockfiles with

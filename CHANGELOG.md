@@ -11,6 +11,21 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.8] — 2026-05-14
+
+Workspace-aware policy. Real-world monorepos (npm workspaces,
+where each member appears in `package-lock.json` at its on-disk
+path with no `resolved` URL) were producing one
+`signal-unavailable` finding per workspace member because the
+public registry returned `HTTP 404` for the private name. The npm
+adapter now classifies these entries as `Source::Workspace`, the
+CLI skips signal gathering for them, and `Policy::evaluate`
+short-circuits to `Allow`. First-party code is not something the
+registry-shaped detectors have anything useful to say about. The
+yarn adapter already classified workspace members correctly; pnpm
+keeps workspace members out of its `packages:` map and so was
+unaffected.
+
 ## [0.1.7] — 2026-05-14
 
 Policy: `signal-unavailable` default severity demoted from

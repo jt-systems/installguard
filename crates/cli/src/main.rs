@@ -770,6 +770,14 @@ async fn gather_signals(
             next += 1;
             let dep = deps[idx].clone();
             in_flight.push(async move {
+                // Workspace members are first-party code; the policy
+                // short-circuits to Allow without consulting any
+                // signal. Skip the provider call so we don't waste a
+                // request and produce a misleading "registry 404"
+                // error in the logs.
+                if matches!(dep.source, installguard_core::dependency::Source::Workspace) {
+                    return (idx, Vec::new());
+                }
                 let signals = if provider.supports(&dep) {
                     match provider.signals(&dep).await {
                         Ok(s) => s,
