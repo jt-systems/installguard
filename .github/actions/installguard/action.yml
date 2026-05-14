@@ -173,6 +173,7 @@ runs:
         github-token: ${{ inputs.github-token }}
         script: |
           const fs = require('fs');
+          const { execFileSync } = require('child_process');
           const path = process.env.IG_SUMMARY_PATH;
           const exitCode = process.env.IG_EXIT_CODE || '0';
           const MARKER = '<!-- installguard-summary -->';
@@ -181,54 +182,27 @@ runs:
             core.warning(`installguard summary not found at ${path}; skipping PR comment`);
             return;
           }
-          const data = JSON.parse(fs.readFileSync(path, 'utf8'));
-          const s = data.summary || { total: 0, allow: 0, warn: 0, block: 0 };
-          const decisions = Array.isArray(data.decisions) ? data.decisions : [];
-          const icon = s.block > 0 ? ':no_entry:' : (s.warn > 0 ? ':warning:' : ':white_check_mark:');
-          const verdict = s.block > 0 ? 'BLOCKED' : (s.warn > 0 ? 'Warnings' : 'Clean');
 
-          const fmtReason = (r) => {
-            switch (r.code) {
-              case 'release_age_below_threshold':
-                return `release too new (${r.age_seconds}s < ${r.threshold_seconds}s)`;
-              case 'disallowed_lifecycle_script':
-                return `disallowed script: \`${r.script}\``;
-              case 'lifecycle_script_ignored':
-                return `script will be skipped: \`${r.script}\``;
-              case 'exotic_source':
-                return `exotic source: ${r.kind}`;
-              case 'published_at_unknown':
-                return 'release date unknown';
-              case 'signal_unavailable':
-                return `signal unavailable: ${r.signal || ''}`;
-              default:
-                return r.code || 'unknown';
-            }
-          };
-
-          const flagged = decisions
-            .filter(d => d.decision === 'block' || d.decision === 'warn')
-            .slice(0, 50);
-
-          let body = `${MARKER}\n## ${icon} InstallGuard \u2014 ${verdict}\n\n`;
-          body += `| Total | Allow | Warn | Block |\n|---:|---:|---:|---:|\n`;
-          body += `| ${s.total} | ${s.allow} | ${s.warn} | **${s.block}** |\n\n`;
-          if (flagged.length > 0) {
-            body += `### Flagged packages\n\n`;
-            body += `| Decision | Package | Reason |\n|---|---|---|\n`;
-            for (const d of flagged) {
-              const reasons = ((d.details && d.details.reasons) || [])
-                .map(fmtReason).join('; ') || '(no reason)';
-              body += `| ${d.decision.toUpperCase()} | \`${d.name}@${d.version}\` | ${reasons} |\n`;
-            }
-            const flaggedTotal = decisions.filter(d => d.decision !== 'allow').length;
-            if (flaggedTotal > flagged.length) {
-              body += `\n_…and ${flaggedTotal - flagged.length} more (truncated)._\n`;
-            }
-          } else {
-            body += `_All ${s.total} dependencies passed policy._\n`;
+          // Render the comment body via the binary's `report` subcommand —
+          // the canonical, unit-tested renderer that handles every Reason
+          // variant. Falls back to a minimal in-line template only if the
+          // binary is too old to know `report` (pre-0.1.1).
+          let body;
+          try {
+            body = execFileSync(
+              'installguard',
+              ['report', '--from', path, '--exit-code', exitCode, '--commit', context.sha],
+              { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+            );
+          } catch (err) {
+            core.warning(`installguard report failed (${err.message}); falling back to minimal summary`);
+            const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+            const s = data.summary || { total: 0, allow: 0, warn: 0, block: 0 };
+            body = `${MARKER}\n## InstallGuard\n\n` +
+              `| Total | Allow | Warn | Block |\n|---:|---:|---:|---:|\n` +
+              `| ${s.total} | ${s.allow} | ${s.warn} | **${s.block}** |\n\n` +
+              `<sub>schema v${data.schemaVersion || 1} · exit ${exitCode}</sub>`;
           }
-          body += `\n<sub>schema v${data.schemaVersion || 1} \u00b7 exit ${exitCode} \u00b7 commit ${context.sha.slice(0,7)}</sub>`;
 
           const { owner, repo } = context.repo;
           const issue_number = context.payload.pull_request.number;

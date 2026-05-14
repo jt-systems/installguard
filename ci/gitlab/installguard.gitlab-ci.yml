@@ -88,7 +88,7 @@
     - set -uo pipefail
     - |
       python3 - <<'PY'
-      import hashlib, json, os, sys, urllib.parse, urllib.request
+      import hashlib, json, os, subprocess, sys, urllib.parse, urllib.request
 
       SUMMARY = "installguard-summary.json"
       CQ_OUT  = "installguard-codequality.json"
@@ -104,30 +104,36 @@
       decisions = data.get("decisions", [])
       lockfile  = data.get("lockfile", "package-lock.json")
 
-      def fmt_reason(r):
+      # ---- Code Quality report (always) ----
+      # The Code Quality JSON schema is GitLab-specific and not produced by the
+      # `installguard report` subcommand, so we synthesise it here. Reason
+      # descriptions reuse the canonical renderer indirectly via the same
+      # decision JSON the binary already emitted.
+      def reason_text(r):
           c = r.get("code", "unknown")
+          # Best-effort English; the full per-variant rendering lives in the
+          # `installguard report` markdown body which the MR note carries.
           if c == "release_age_below_threshold":
-              return f"release too new ({r.get('age_seconds')}s < {r.get('threshold_seconds')}s)"
+              return f"release age {r.get('observed_minutes')}m < {r.get('required_minutes')}m"
           if c == "disallowed_lifecycle_script":
-              return f"disallowed script: `{r.get('script')}`"
-          if c == "lifecycle_script_ignored":
-              return f"script will be skipped: `{r.get('script')}`"
-          if c == "exotic_source":
-              return f"exotic source: {r.get('kind')}"
-          if c == "published_at_unknown":
-              return "release date unknown"
-          if c == "signal_unavailable":
-              return f"signal unavailable: {r.get('signal','')}"
+              return f"disallowed script: {r.get('script')}"
+          if c == "advisory_known":
+              return f"{r.get('id')} ({r.get('severity')})"
+          if c == "license_disallowed":
+              return f"license {','.join(r.get('licenses', []))} not allowlisted"
+          if c == "scorecard_below_threshold":
+              return f"scorecard {r.get('score')}/10 < {r.get('threshold')}"
+          if c == "trust_score_below_threshold":
+              return f"trust {r.get('score')}/100 < {r.get('threshold')}"
           return c
 
-      # ---- Code Quality report (always) ----
       cq = []
       for d in decisions:
           if d.get("decision") == "allow":
               continue
           severity = "blocker" if d["decision"] == "block" else "minor"
           reasons = (d.get("details") or {}).get("reasons", [])
-          desc = "; ".join(fmt_reason(r) for r in reasons) or "policy violation"
+          desc = "; ".join(reason_text(r) for r in reasons) or "policy violation"
           fp = hashlib.sha1(f"{d.get('name')}@{d.get('version')}|{desc}".encode()).hexdigest()
           cq.append({
               "description": f"InstallGuard: {d.get('name')}@{d.get('version')} \u2014 {desc}",
@@ -156,36 +162,25 @@
           print("installguard: missing GitLab API context; skipping MR note", file=sys.stderr)
           sys.exit(0)
 
-      block = summary.get("block", 0)
-      warn  = summary.get("warn", 0)
-      allow = summary.get("allow", 0)
-      total = summary.get("total", 0)
-      if block:
-          icon, verdict = "\U0001F6AB", "BLOCKED"
-      elif warn:
-          icon, verdict = "\u26A0\uFE0F", "Warnings"
-      else:
-          icon, verdict = "\u2705", "Clean"
-
-      lines = [MARKER, f"## {icon} InstallGuard \u2014 {verdict}", ""]
-      lines += ["| Total | Allow | Warn | Block |", "|---:|---:|---:|---:|",
-                f"| {total} | {allow} | {warn} | **{block}** |", ""]
-      flagged = [d for d in decisions if d.get("decision") != "allow"]
-      shown   = flagged[:50]
-      if shown:
-          lines += ["### Flagged packages", "",
-                    "| Decision | Package | Reason |", "|---|---|---|"]
-          for d in shown:
-              reasons = (d.get("details") or {}).get("reasons", [])
-              desc = "; ".join(fmt_reason(r) for r in reasons) or "(no reason)"
-              lines.append(f"| {d['decision'].upper()} | `{d.get('name')}@{d.get('version')}` | {desc} |")
-          if len(flagged) > len(shown):
-              lines.append(f"\n_\u2026and {len(flagged)-len(shown)} more (truncated)._")
-      else:
-          lines.append(f"_All {total} dependencies passed policy._")
-      sv = data.get("schemaVersion", 1)
-      lines.append(f"\n<sub>schema v{sv} \u00b7 commit {sha}</sub>")
-      body = "\n".join(lines)
+      # Render the comment body via the binary's `report` subcommand — the
+      # canonical, unit-tested renderer that handles every Reason variant.
+      # Falls back to a minimal in-line template only if the binary is too
+      # old to know `report` (pre-0.1.1).
+      try:
+          rc = open("installguard.rc").read().strip() if os.path.exists("installguard.rc") else "0"
+          body = subprocess.check_output(
+              ["installguard", "report", "--from", SUMMARY,
+               "--exit-code", rc, "--commit", sha or "unknown"],
+              text=True,
+          )
+      except (subprocess.CalledProcessError, FileNotFoundError) as e:
+          print(f"installguard: report subcommand failed ({e}); using minimal body", file=sys.stderr)
+          block = summary.get("block", 0); warn = summary.get("warn", 0)
+          allow = summary.get("allow", 0); total = summary.get("total", 0)
+          body = (f"{MARKER}\n## InstallGuard\n\n"
+                  f"| Total | Allow | Warn | Block |\n|---:|---:|---:|---:|\n"
+                  f"| {total} | {allow} | {warn} | **{block}** |\n\n"
+                  f"<sub>schema v{data.get('schemaVersion', 1)} \u00b7 commit {sha}</sub>")
 
       def request(method, url, payload=None):
           req = urllib.request.Request(url, method=method)

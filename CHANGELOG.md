@@ -11,6 +11,47 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+### Added
+
+- New `installguard report --from <summary.json>` subcommand that
+  renders a `ci --summary-file` JSON document as the canonical
+  Markdown sticky-comment body (GitHub PR / GitLab MR / any GFM
+  consumer). Output is deterministic, includes the
+  `<!-- installguard-summary -->` HTML marker for sticky-comment
+  idempotency, escapes `|` in reason cells, and truncates with
+  `--max-rows`. Optional `--commit` and `--exit-code` flags surface
+  context in the comment footer.
+- `Reason::human_summary()` promoted from a private function in
+  `vex.rs` to a public method on `Reason`. This is the single
+  source of truth for English renderings of reason variants and is
+  shared by VEX `action_statement`, audit logs, and the new
+  `report` subcommand. Stability guarantee: existing variants'
+  *meaning* will not change between minor versions; new variants
+  add new arms only.
+
+### Changed
+
+- GitHub Action ([`.github/actions/installguard/action.yml`](.github/actions/installguard/action.yml))
+  and GitLab CI template ([`ci/gitlab/installguard.gitlab-ci.yml`](ci/gitlab/installguard.gitlab-ci.yml))
+  now shell out to `installguard report` for the PR/MR comment body.
+  Previously each surface had its own renderer (JavaScript and
+  Python respectively) covering only 6 of the ~20 `Reason` variants
+  — every M3/M4 reason was rendered as an opaque kebab-case code.
+  Both surfaces now describe every variant in plain English with no
+  template-side maintenance.
+
+### Fixed
+
+- PR / MR sticky comments now describe `advisory_known`,
+  `license_disallowed`, `scorecard_below_threshold`,
+  `maintainer_new_account`, `name_squat`,
+  `version_surface_change`, `dist_tag_anomaly`,
+  `trust_score_below_threshold`, `provenance_missing`,
+  `project_archived`, `license_missing`, `publisher_change`,
+  `deprecated_version`, and `suspicious_script` properly. Previously
+  these displayed only their kebab-case code on both GitHub and
+  GitLab.
+
 ## [0.1.0] — 2026-05-13
 
 First tagged alpha. Covers milestones M0 through M4 from

