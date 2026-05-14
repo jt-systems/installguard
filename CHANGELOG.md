@@ -11,6 +11,20 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.11] — 2026-05-14
+
+Default `scripts.allow` gains `supabase`. The npm-distributed
+Supabase CLI is the postinstall-downloads-platform-binary pattern
+(same shape as `esbuild`, `playwright`, `@biomejs/biome`): the
+script genuinely needs to run for the package to function, and
+the package satisfies the existing inclusion criteria — well over
+1M weekly downloads, single well-understood install purpose
+(fetch the platform-appropriate CLI binary from GitHub Releases
+and install it into `node_modules/.bin`), no historical
+takeover advisory tied to the install script. User-supplied
+`scripts.allow` continues to extend (not replace) the built-in
+default.
+
 ## [0.1.10] — 2026-05-14
 
 Policy: `defaults.nameSquatAllow` allowlist for the name-squat

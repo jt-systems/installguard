@@ -818,6 +818,7 @@ const DEFAULT_SCRIPT_ALLOWLIST: &[&str] = &[
     "playwright",
     "puppeteer",
     "sharp",
+    "supabase",
 ];
 
 fn source_kind(s: &crate::dependency::Source) -> &'static str {
@@ -995,7 +996,14 @@ mod tests {
         signals.push(Signal::LifecycleScripts {
             scripts: vec!["postinstall".into()],
         });
-        for name in ["esbuild", "fsevents", "msw", "cypress", "playwright"] {
+        for name in [
+            "esbuild",
+            "fsevents",
+            "msw",
+            "cypress",
+            "playwright",
+            "supabase",
+        ] {
             let d = p.evaluate(
                 &dep(name, false, Source::Registry { url: "x".into() }),
                 &signals,
