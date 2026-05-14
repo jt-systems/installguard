@@ -75,14 +75,11 @@ Comparison table in [whitepaper §17](whitepaper.md#17-comparison-with-existing-
 > **Alpha — `0.1.0`.** Pre-built binaries land with the first tagged release; until then both install paths build from source.
 
 ```bash
-# Homebrew (macOS, Linux) — once jt-systems/homebrew-installguard is published:
+# Homebrew (macOS, Linux)
 brew install jt-systems/installguard/installguard
 
 # Or build from source (Rust 1.86+):
 cargo install --path crates/cli
-
-# Initialise a baseline policy
-installguard init
 
 # Scan the current project (uses package-lock.json / pnpm-lock.yaml / yarn.lock)
 installguard scan
@@ -90,8 +87,11 @@ installguard scan
 # Triage findings and print a paste-ready installguard.yaml block
 installguard doctor
 
-# In CI: hard-fail on policy violations and emit an attestation
-installguard ci --attestation installguard.intoto.jsonl
+# In CI: hard-fail on policy violations
+installguard ci --summary-file installguard-summary.json
+
+# Emit an unsigned in-toto attestation of the evaluation
+installguard attest --out installguard.intoto.json
 
 # Air-gapped CI: re-verify offline against a recorded snapshot
 installguard ci --frozen
