@@ -409,11 +409,21 @@ impl Policy {
         // Always-on: "latest moved backwards" is never a normal
         // operation and the signal is purely structural. Default
         // severity `block`; demote with `severity.dist-tag-anomaly: warn`.
+        //
+        // Suppression: if the resolved dependency is itself on the
+        // version that `latest` points at, the anomaly does not
+        // affect this install — the user already has what `latest`
+        // advertises. Without this guard, packages like
+        // `attr-accept@2.2.5` (latest=2.2.5, highest=3.0.0 on a
+        // separate release line) flag every consumer who simply
+        // followed the publisher's stated current release.
         if let Some((latest, highest)) = signals.dist_tag_anomaly() {
-            reasons.push(Reason::DistTagAnomaly {
-                latest_version: latest.to_string(),
-                highest_published: highest.to_string(),
-            });
+            if dep.version != latest {
+                reasons.push(Reason::DistTagAnomaly {
+                    latest_version: latest.to_string(),
+                    highest_published: highest.to_string(),
+                });
+            }
         }
         // ── Name squat (typo / homoglyph) ───────────────────────────────
         // Always-on: a near-miss for a popular package is structural
@@ -1352,6 +1362,29 @@ mod tests {
             Utc::now(),
         );
         assert!(matches!(d, Decision::Warn { .. }), "got {d:?}");
+    }
+
+    /// `attr-accept@2.2.5` shipped in real lockfiles with
+    /// `dist-tags.latest = 2.2.5` while `3.0.0` was also published
+    /// on a separate release line. The user is on the version
+    /// `latest` advertises and is therefore unaffected by the
+    /// anomaly; we must not block them.
+    #[test]
+    fn dist_tag_anomaly_suppressed_when_resolved_equals_latest() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::DistTagAnomaly {
+            latest_version: "1.0.0".into(),
+            highest_published: "2.0.0".into(),
+        });
+        // `dep()` produces a dependency at version 1.0.0 — same as
+        // `latest_version` above.
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Allow), "got {d:?}");
     }
 
     #[test]
