@@ -405,9 +405,7 @@ mod tests {
                 observed_minutes: 1,
                 required_minutes: 1440,
             },
-            Reason::ExoticSource {
-                kind: "git".into(),
-            },
+            Reason::ExoticSource { kind: "git".into() },
             Reason::DisallowedLifecycleScript {
                 script: "preinstall".into(),
             },

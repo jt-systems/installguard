@@ -1328,7 +1328,10 @@ fn write_pretty_footer<W: std::io::Write>(
             paint(&url, ANSI_DIM, color)
         )?;
     } else {
-        writeln!(out, "  \u{2022} Investigate each finding on its registry page")?;
+        writeln!(
+            out,
+            "  \u{2022} Investigate each finding on its registry page"
+        )?;
     }
     writeln!(
         out,
