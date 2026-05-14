@@ -722,10 +722,53 @@ impl Policy {
     fn script_allowed(&self, package: &str, _script: &str) -> bool {
         match self.scripts.policy {
             ScriptPolicy::AllowByDefault => true,
-            ScriptPolicy::DenyByDefault => self.scripts.allow.iter().any(|p| p == package),
+            ScriptPolicy::DenyByDefault => {
+                DEFAULT_SCRIPT_ALLOWLIST.binary_search(&package).is_ok()
+                    || self.scripts.allow.iter().any(|p| p == package)
+            }
         }
     }
 }
+
+/// Curated list of packages whose install-time lifecycle scripts
+/// are documented and load-bearing — overwhelmingly native-binary
+/// downloaders or workspace bootstrappers. These are the dominant
+/// source of "everyone's CI is red" false positives under the
+/// default DenyByDefault policy: the script genuinely needs to run
+/// for the package to function, and the maintainer history /
+/// install pattern is well known to the community.
+///
+/// Inclusion criteria (all four required):
+///   * ≥ 1M weekly downloads on npm.
+///   * Single, well-understood install / postinstall purpose
+///     (native binary fetch, asset copy, native build) that the
+///     package's README documents prominently.
+///   * No historical takeover / supply-chain advisory tied to the
+///     install script itself.
+///   * Removing the script would render the package non-functional
+///     (so users can't realistically vendor a "no-scripts" fork).
+///
+/// MUST stay sorted ASCII: looked up via `binary_search`. The
+/// `default_script_allowlist_is_sorted_for_binary_search` test
+/// enforces this. Per-package, not per-(package, script): if a
+/// listed package adds a *new* lifecycle script, the
+/// `VersionSurfaceChange` signal still fires and surfaces the
+/// addition independently — this allowlist concerns only "this
+/// package legitimately uses install scripts", not "trust any
+/// future additions blindly".
+const DEFAULT_SCRIPT_ALLOWLIST: &[&str] = &[
+    "bcrypt",
+    "cypress",
+    "electron",
+    "esbuild",
+    "fsevents",
+    "msw",
+    "node-gyp",
+    "node-pre-gyp",
+    "playwright",
+    "puppeteer",
+    "sharp",
+];
 
 fn source_kind(s: &crate::dependency::Source) -> &'static str {
     use crate::dependency::Source;
@@ -859,8 +902,11 @@ mod tests {
 
     #[test]
     fn scripts_deny_by_default() {
+        // Use a name not in DEFAULT_SCRIPT_ALLOWLIST so the test
+        // genuinely exercises the user-supplied `scripts.allow`
+        // path rather than falling through to the built-in default.
         let p = Policy::from_yaml(
-            "policyVersion: 1\nscripts:\n  policy: deny-by-default\n  allow: [esbuild]\n",
+            "policyVersion: 1\nscripts:\n  policy: deny-by-default\n  allow: [my-private-tool]\n",
         )
         .unwrap();
         let mut signals = SignalSet::default();
@@ -876,11 +922,69 @@ mod tests {
         assert!(blocked.is_block());
 
         let allowed = p.evaluate(
-            &dep("esbuild", true, Source::Registry { url: "x".into() }),
+            &dep(
+                "my-private-tool",
+                true,
+                Source::Registry { url: "x".into() },
+            ),
             &signals,
             Utc::now(),
         );
         assert!(matches!(allowed, Decision::Allow));
+    }
+
+    /// Curated default allowlist covers the well-known native-binary
+    /// downloaders without requiring users to write any policy YAML.
+    /// Without this, a default `installguard scan` blocks every CI
+    /// run that has esbuild / fsevents / msw in its lockfile, which
+    /// in 2026 is virtually every JavaScript project on earth.
+    #[test]
+    fn default_script_allowlist_covers_native_binary_packages() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::LifecycleScripts {
+            scripts: vec!["postinstall".into()],
+        });
+        for name in ["esbuild", "fsevents", "msw", "cypress", "playwright"] {
+            let d = p.evaluate(
+                &dep(name, false, Source::Registry { url: "x".into() }),
+                &signals,
+                Utc::now(),
+            );
+            assert!(
+                matches!(d, Decision::Allow),
+                "{name} should be allowed by default, got {d:?}"
+            );
+        }
+    }
+
+    /// The default allowlist must not silence un-vetted packages.
+    #[test]
+    fn default_script_allowlist_still_blocks_arbitrary_packages() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::LifecycleScripts {
+            scripts: vec!["postinstall".into()],
+        });
+        let d = p.evaluate(
+            &dep(
+                "definitely-not-vetted",
+                false,
+                Source::Registry { url: "x".into() },
+            ),
+            &signals,
+            Utc::now(),
+        );
+        assert!(d.is_block(), "got {d:?}");
+    }
+
+    /// Sorted invariant required by `binary_search` in
+    /// `script_allowed`. If you add a name, keep the slice sorted.
+    #[test]
+    fn default_script_allowlist_is_sorted_for_binary_search() {
+        let mut sorted = DEFAULT_SCRIPT_ALLOWLIST.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(sorted.as_slice(), DEFAULT_SCRIPT_ALLOWLIST);
     }
 
     #[test]
