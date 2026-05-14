@@ -87,6 +87,9 @@ installguard init
 # Scan the current project (uses package-lock.json / pnpm-lock.yaml / yarn.lock)
 installguard scan
 
+# Triage findings and print a paste-ready installguard.yaml block
+installguard doctor
+
 # In CI: hard-fail on policy violations and emit an attestation
 installguard ci --attestation installguard.intoto.jsonl
 

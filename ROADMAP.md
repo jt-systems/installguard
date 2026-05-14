@@ -163,6 +163,8 @@ Polish that drives adoption.
 
 - ☐ VS Code extension: hover risk on `package.json`, code-lens for upgrades blocked by policy
 - ☐ JetBrains plugin
+- ☑ `installguard doctor` — triage findings and emit a paste-ready `installguard.yaml` block
+- ☑ Editor JSON-Schema integration docs (VS Code, Zed, JetBrains, Neovim)
 - ☐ `installguard explain <package>@<version>` — full signal report and policy trace
 - ☐ `installguard simulate --policy new.yaml` — preview a policy change against current repo
 - ☐ Renovate / Dependabot integration: emit policy-aware update preferences (`installguard.policy.json`) so bots skip updates that would violate policy
