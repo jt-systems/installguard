@@ -10,7 +10,7 @@
 # values from the published release's checksums.txt on every `v*` tag.
 class Installguard < Formula
   desc "Dependency freshness and install-script governance for npm/pnpm/yarn"
-  homepage "https://github.com/jt-systems/installguard"
+  homepage "https://installguard.dev"
   version "0.1.0"
   license "Apache-2.0"
 

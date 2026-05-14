@@ -6,6 +6,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-alpha-yellow.svg)](ROADMAP.md)
 [![Whitepaper](https://img.shields.io/badge/docs-whitepaper-informational.svg)](whitepaper.md)
+[![Website](https://img.shields.io/badge/web-installguard.dev-blue.svg)](https://installguard.dev)
 
 ---
 
