@@ -3,7 +3,7 @@
 # Usage in a downstream `.gitlab-ci.yml`:
 #
 #   include:
-#     - remote: 'https://raw.githubusercontent.com/installguard/installguard/v1/ci/gitlab/installguard.gitlab-ci.yml'
+#     - remote: 'https://raw.githubusercontent.com/jt-systems/installguard/main/ci/gitlab/installguard.gitlab-ci.yml'
 #
 #   installguard:
 #     extends: .installguard
@@ -36,7 +36,7 @@
   variables:
     INSTALLGUARD_PATH: "."
     INSTALLGUARD_REF: "main"
-    INSTALLGUARD_REPO_URL: "https://github.com/installguard/installguard.git"
+    INSTALLGUARD_REPO_URL: "https://github.com/jt-systems/installguard.git"
     INSTALLGUARD_CONCURRENCY: "16"
     INSTALLGUARD_NO_CACHE: "false"
     INSTALLGUARD_IGNORE_SCRIPTS: "false"
