@@ -90,7 +90,7 @@ jobs:
                     installguard-${{ matrix.target }}.exe
 
       - name: Upload binary artefact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binary-${{ matrix.target }}
           path: installguard-${{ matrix.target }}*
