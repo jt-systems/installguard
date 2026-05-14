@@ -11,6 +11,13 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-05-14
+
+First maintenance release. Reduces noise from real-world scans,
+fixes a packument decode regression that affected the React 19
+family, and ships the new `installguard report` subcommand that
+was already merged on `develop` after v0.1.0.
+
 ### Added
 
 - New `installguard report --from <summary.json>` subcommand that
@@ -24,10 +31,23 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 - `Reason::human_summary()` promoted from a private function in
   `vex.rs` to a public method on `Reason`. This is the single
   source of truth for English renderings of reason variants and is
-  shared by VEX `action_statement`, audit logs, and the new
-  `report` subcommand. Stability guarantee: existing variants'
-  *meaning* will not change between minor versions; new variants
-  add new arms only.
+  shared by VEX `action_statement`, audit logs, the new `report`
+  subcommand, and the new `scan --format pretty` renderer.
+  Stability guarantee: existing variants' *meaning* will not
+  change between minor versions; new variants add new arms only.
+- `installguard scan` gains a new `pretty` output format (now the
+  default) that groups results by severity, renders each reason
+  via `Reason::human_summary()`, and ANSI-colours the verdict /
+  counts. Honours the conventional `NO_COLOR` env var
+  (https://no-color.org) and disables colour automatically when
+  stdout is not a TTY. The previous `human` and `json` formats
+  remain available.
+- Curated allow-list inside `name_similarity::classify` for
+  well-known packages whose names are exactly distance-1 from a
+  popular target (`ulid`/`uuid`, `nuxt`/`next`, `preact`/`react`,
+  plus `redis`, `vitest`, `fastly`). Allow-listed names short-
+  circuit to `Classification::Ok` without being promoted to new
+  typosquat targets themselves.
 
 ### Changed
 
@@ -39,9 +59,32 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
   — every M3/M4 reason was rendered as an opaque kebab-case code.
   Both surfaces now describe every variant in plain English with no
   template-side maintenance.
+- Default `--format` for `installguard scan` switches from `human`
+  to `pretty`. Scripts that grep one-line-per-decision output
+  should pass `--format human` explicitly.
 
 ### Fixed
 
+- `installguard-signal-npm-registry` could fail to decode any
+  packument whose per-version `deprecated` field arrived as a
+  JSON boolean instead of the documented string — notably
+  `react@19.x`, `react-dom@19.x`, `scheduler@0.25+`, `react-is`,
+  and `react-reconciler`. Previously the entire packument decode
+  errored with `invalid type: boolean`, which downgraded those
+  packages to `signal_unavailable` and forced a BLOCK on policies
+  requiring publish-time anomaly checks. The field now uses a
+  custom deserialiser that preserves any string verbatim and
+  coerces every other shape (boolean, null, number, array,
+  object) to `None`.
+- The npm registry adapter no longer reports `prepare` as a
+  registry lifecycle script. `prepare` only runs on `npm install`
+  from a git source, never from a registry tarball, so reporting
+  it for registry packuments generated `DisallowedLifecycleScript`
+  noise on every package whose maintainers declare a build-time
+  `prepare` (Husky, TypeScript libraries, the React monorepo,
+  etc.) without flagging anything that can actually execute on
+  the consumer's machine. Git-source dependencies remain gated
+  by the `Source::Git` rules in policy.rs.
 - PR / MR sticky comments now describe `advisory_known`,
   `license_disallowed`, `scorecard_below_threshold`,
   `maintainer_new_account`, `name_squat`,
@@ -131,5 +174,6 @@ First tagged alpha. Covers milestones M0 through M4 from
   [`.github/workflows/release.yml`](.github/workflows/release.yml) is wired
   but commented out pending a real first-release dry run.
 
-[Unreleased]: https://github.com/jt-systems/installguard/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jt-systems/installguard/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/jt-systems/installguard/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jt-systems/installguard/releases/tag/v0.1.0
