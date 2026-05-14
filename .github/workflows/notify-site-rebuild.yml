@@ -12,6 +12,16 @@ name: Notify installguard.dev
 #   secret. (Same hook URL as installguard.dev's CF_DEPLOY_HOOK.)
 
 on:
+  # Tag push is the source of truth: the Release workflow is also
+  # triggered by the same tag, but it publishes the GitHub Release
+  # via GITHUB_TOKEN — and events fired by GITHUB_TOKEN do not
+  # trigger downstream workflows. So we listen for the tag itself.
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]*"
+  # Kept for completeness in case a release is ever published
+  # manually (which would use a real user token and therefore
+  # would trigger this).
   release:
     types: [published]
   workflow_dispatch:
