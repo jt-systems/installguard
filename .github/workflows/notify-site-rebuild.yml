@@ -12,16 +12,20 @@ name: Notify installguard.dev
 #   secret. (Same hook URL as installguard.dev's CF_DEPLOY_HOOK.)
 
 on:
-  # Tag push is the source of truth: the Release workflow is also
-  # triggered by the same tag, but it publishes the GitHub Release
-  # via GITHUB_TOKEN — and events fired by GITHUB_TOKEN do not
-  # trigger downstream workflows. So we listen for the tag itself.
-  push:
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]*"
-  # Kept for completeness in case a release is ever published
-  # manually (which would use a real user token and therefore
-  # would trigger this).
+  # Primary trigger: fires when the Release workflow completes
+  # successfully. By then the GitHub Release object actually exists,
+  # so when installguard.dev's RepoStats component queries the GH API
+  # for "latest release" during its build, v0.1.N is what comes back.
+  #
+  # workflow_run is special: it fires regardless of which token
+  # triggered the upstream workflow (so it works around the
+  # GITHUB_TOKEN-can't-trigger-downstream-workflows guard that
+  # blocks `release: published` from reaching us).
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  # Belt-and-braces — kept in case a release is ever published
+  # manually (real user token, fires this directly).
   release:
     types: [published]
   workflow_dispatch:
@@ -31,6 +35,11 @@ permissions: {}
 jobs:
   ping:
     runs-on: ubuntu-latest
+    # When triggered via workflow_run we get the upstream conclusion
+    # in github.event.workflow_run.conclusion. Skip the rebuild if the
+    # Release workflow itself failed — no point flipping the site to
+    # a tag that doesn't have artefacts.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Trigger Cloudflare deploy
         env:
