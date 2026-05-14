@@ -11,6 +11,29 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-05-14
+
+Scan UX: live progress indicator. The `evaluate` phase used to
+sit silent for several seconds while it fanned out to the
+registry, deps.dev, OSV and Scorecard for every dependency. On
+real-world lockfiles (~1k packages, ~3 s) this read as a hang.
+A small Braille spinner now ticks on stderr at 10 Hz with a
+`done/total` counter, redrawn in place; on completion the line
+is cleared so the regular pretty verdict starts on column 0.
+
+### Added
+
+- Live `\u{2802}\u{2823}\u{2807}` Braille spinner during the
+  signal-gather phase of `installguard scan`, `ci`, `lock` and
+  `attest`. Format: `  \u{2839} scanning 423/1276`. Ticks from a
+  Tokio task so it keeps moving even when the network stalls
+  between completions.
+- Indicator is fully suppressed when stderr is not a TTY (CI,
+  pipes, redirects) and when `NO_COLOR` is set, on the same
+  reasoning as the rest of the CLI's decorative output. No new
+  dependencies — the helper is ~90 lines of `std::io::stderr`
+  and `tokio::time`.
+
 ## [0.1.2] — 2026-05-14
 
 Second maintenance release. Cuts a further 21 false-positive

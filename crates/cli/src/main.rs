@@ -30,6 +30,9 @@ use installguard_signal_npm_registry::NpmRegistryProvider;
 use installguard_signal_osv::OsvProvider;
 use installguard_signal_scorecard::ScorecardProvider;
 
+mod progress;
+use progress::Progress;
+
 #[derive(Debug, Parser)]
 #[command(name = "installguard", version, about, long_about = None)]
 struct Cli {
@@ -432,7 +435,9 @@ async fn evaluate(args: &EvalArgs) -> Result<EvalOutput> {
     tracing::info!(count = deps.len(), "parsed lockfile");
 
     let provider = build_provider(args).context("building signal provider")?;
-    let signal_sets = gather_signals(provider.as_ref(), &deps, args.concurrency).await;
+    let progress = Progress::start(deps.len(), "scanning");
+    let signal_sets = gather_signals(provider.as_ref(), &deps, args.concurrency, &progress).await;
+    progress.finish();
 
     let ctx = EvalContext {
         ignore_scripts: args.ignore_scripts || detect_npmrc_ignore_scripts(&args.path),
@@ -753,6 +758,7 @@ async fn gather_signals(
     provider: &dyn SignalProvider,
     deps: &[ResolvedDependency],
     concurrency: usize,
+    progress: &Progress,
 ) -> Vec<SignalSet> {
     let mut results: Vec<SignalSet> = vec![SignalSet::default(); deps.len()];
     let mut in_flight = FuturesUnordered::new();
@@ -780,6 +786,7 @@ async fn gather_signals(
         }
         if let Some((idx, signals)) = in_flight.next().await {
             results[idx] = SignalSet { signals };
+            progress.inc();
         }
     }
     results
