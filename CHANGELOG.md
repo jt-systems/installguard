@@ -11,16 +11,62 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-05-14
+
+Second maintenance release. Cuts a further 21 false-positive
+blocks from the same real-world 1276-package scan that v0.1.1
+drove down from ~120 to ~21 — the dominant remaining noise was
+intentional LTS dist-tag holds and well-known native-binary
+install scripts. Also retires the on-disk cache schema so the
+v0.1.1 npm-registry fixes actually take effect on machines that
+had already populated their cache.
+
+### Added
+
+- Default `scripts.allow` now includes a curated set of
+  well-known native-binary / asset-bootstrap packages: `bcrypt`,
+  `cypress`, `electron`, `esbuild`, `fsevents`, `msw`,
+  `node-gyp`, `node-pre-gyp`, `playwright`, `puppeteer`, `sharp`.
+  Inclusion criteria documented inline next to the constant. Same
+  pattern as the typo allow-list shipped in v0.1.1: sorted slice,
+  `binary_search` lookup, sortedness enforced by a unit test. The
+  user-supplied `scripts.allow` continues to extend (not replace)
+  the built-in default.
+
+### Changed
+
+- `DistTagAnomaly` now only fires when `latest`'s major version
+  is *strictly less than* the highest published non-prerelease
+  major. Same-major patch / minor drift is overwhelmingly
+  intentional LTS-line maintenance (e.g. Storybook holding
+  `latest=8.6.14` while `8.6.18` is published and `9.x` rides
+  `next`) and was the dominant remaining source of false-positive
+  blocks. The cross-major case — the structural high-precision
+  signal — is unchanged. A future history-aware re-introduction
+  of the same-major case (firing only when `latest` regressed
+  from a previously-higher value) is possible once we cache prior
+  packument metadata.
+
 ### Fixed
 
+- `installguard scan` no longer reports `DistTagAnomaly` for a
+  dependency that is itself on the version `latest` advertises.
+  In real lockfiles this surfaced as actionable-looking blocks
+  for `attr-accept@2.2.5` and `get-intrinsic@1.3.0` whose
+  `dist-tags.latest` deliberately points at the older release
+  line; the user is on `latest` and is not actually affected by
+  the gap. The signal itself is still emitted (and feeds the
+  trust score / audit log) so a future history-aware variant can
+  consume it.
 - Bumped the on-disk signal cache `SCHEMA_VERSION` from 1 to 2 so
   caches written by v0.1.0 / v0.1.1 are invalidated automatically
   on first use under v0.1.2. Without this bump, the v0.1.1 binary
   still surfaced stale `prepare` lifecycle-script blocks and stale
   `signal provider "npm-registry" unavailable: decode: …` warnings
-  for any package whose packument was fetched and cached under the
-  pre-fix code paths. The schema-version check that drops mismatched
-  entries was already in place; only the constant needed bumping.
+  for any package whose packument was fetched and cached under
+  the pre-fix code paths. The schema-version check that drops
+  mismatched entries was already in place; only the constant
+  needed bumping.
 
 ## [0.1.1] — 2026-05-14
 
@@ -185,6 +231,7 @@ First tagged alpha. Covers milestones M0 through M4 from
   [`.github/workflows/release.yml`](.github/workflows/release.yml) is wired
   but commented out pending a real first-release dry run.
 
-[Unreleased]: https://github.com/jt-systems/installguard/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/jt-systems/installguard/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/jt-systems/installguard/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jt-systems/installguard/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jt-systems/installguard/releases/tag/v0.1.0
