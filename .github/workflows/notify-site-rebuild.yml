@@ -1,0 +1,35 @@
+name: Notify installguard.dev
+
+# Fires the Cloudflare deploy hook for installguard.dev whenever a
+# new GitHub Release is published in this repo. The site fetches the
+# latest release tag at build time and bakes it into the homepage
+# hero, so this gives us an "instant version flip" the moment a
+# release ships.
+#
+# Required secret: SITE_DEPLOY_HOOK
+#   Cloudflare dashboard → Workers & Pages → installguard → Settings
+#   → Triggers → Deploy Hooks → copy URL → store here as a repo
+#   secret. (Same hook URL as installguard.dev's CF_DEPLOY_HOOK.)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Cloudflare deploy
+        env:
+          HOOK: ${{ secrets.SITE_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::error::SITE_DEPLOY_HOOK secret is not set"
+            exit 1
+          fi
+          curl --fail --silent --show-error -X POST "$HOOK"
+          echo
+          echo "Deploy hook fired."
