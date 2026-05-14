@@ -552,9 +552,33 @@ fn bin_names(bin: Option<&serde_json::Value>) -> Vec<String> {
 /// non-prerelease published version. Pre-releases are excluded from
 /// the “highest” comparison because shipping `2.0.0-rc.1` while
 /// `latest=1.4.0` is normal release-train behaviour, not an attack.
+/// Detects the “`latest` moved backwards” pattern: `dist-tags.latest`
+/// resolves to a version that is strictly older than the highest
+/// non-prerelease published version. Pre-releases are excluded from
+/// the “highest” comparison because shipping `2.0.0-rc.1` while
+/// `latest=1.4.0` is normal release-train behaviour, not an attack.
+///
+/// We only fire when the gap crosses a major-version boundary
+/// (i.e. `latest.major < highest.major`). Same-major patch / minor
+/// drift is overwhelmingly intentional LTS-line maintenance — e.g.
+/// Storybook keeps `latest=8.6.14` while `8.6.18` exists because
+/// `8.6.x` is the supported line and `9.x` rides `next` — and is
+/// the dominant source of false-positive blocks in real lockfiles.
+/// A genuine compromised-account "rollback" attack ships a patch
+/// or minor *under* the existing major (e.g. `1.4.5` after
+/// `latest` was `1.5.0`), which appears as `latest.major ==
+/// highest.major` AND `latest < highest` — exactly the case we no
+/// longer flag here. The signal is currently structural and one-shot,
+/// with no packument history; once we cache the prior `latest` value
+/// we can re-add the same-major case as a separate, history-aware
+/// signal. Until then, suppressing same-major gaps trades a class
+/// of true positives we cannot reliably distinguish from LTS
+/// maintenance against far higher precision on the cross-major case.
+///
 /// Returns `None` when there is no `latest` tag, the tag points to
-/// an unparseable version, or the tag points at the maximum
-/// non-prerelease version (the healthy case).
+/// an unparseable version, the tag points at the maximum
+/// non-prerelease version (the healthy case), or the gap is within
+/// a single major.
 fn detect_dist_tag_anomaly(packument: &Packument) -> Option<Signal> {
     let latest = packument.dist_tags.get("latest")?;
     let latest_sem = Version::parse(latest).ok()?;
@@ -566,7 +590,7 @@ fn detect_dist_tag_anomaly(packument: &Packument) -> Option<Signal> {
         .filter(|v| v.pre.is_empty())
         .max()?;
 
-    if latest_sem >= max_release {
+    if latest_sem >= max_release || latest_sem.major == max_release.major {
         None
     } else {
         Some(Signal::DistTagAnomaly {
@@ -1084,6 +1108,29 @@ mod tests {
     fn dist_tag_anomaly_no_latest_tag_returns_none() {
         let p = pkmt_with_dist_tags(&["1.0.0", "2.0.0"], &[("next", "2.0.0")]);
         assert!(detect_dist_tag_anomaly(&p).is_none());
+    }
+
+    /// Storybook ships `8.6.x` as the supported line and rides
+    /// `9.x` on `next`. Patch / minor drift inside one major is
+    /// dominated by intentional LTS maintenance and must not
+    /// produce the signal.
+    #[test]
+    fn dist_tag_anomaly_quiet_for_same_major_drift() {
+        // Patch-level (real Storybook lockfile shape).
+        let p = pkmt_with_dist_tags(&["8.6.14", "8.6.15", "8.6.18"], &[("latest", "8.6.14")]);
+        assert!(detect_dist_tag_anomaly(&p).is_none());
+        // Minor-level inside one major.
+        let p = pkmt_with_dist_tags(&["1.0.0", "1.5.0", "1.7.0"], &[("latest", "1.5.0")]);
+        assert!(detect_dist_tag_anomaly(&p).is_none());
+    }
+
+    /// Cross-major regression — `latest` sits on `1.x` while `2.x`
+    /// is published — remains the structural high-precision case
+    /// we still want to surface.
+    #[test]
+    fn dist_tag_anomaly_fires_across_major_boundary() {
+        let p = pkmt_with_dist_tags(&["1.0.0", "1.1.0", "2.0.0"], &[("latest", "1.1.0")]);
+        assert!(detect_dist_tag_anomaly(&p).is_some());
     }
 
     #[test]
