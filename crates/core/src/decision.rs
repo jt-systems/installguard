@@ -398,6 +398,7 @@ mod tests {
     /// dependency); every other variant must return a non-empty hint
     /// short enough to fit one terminal line at typical widths.
     #[test]
+    #[allow(clippy::too_many_lines)] // exhaustive enumeration is the point
     fn every_reason_variant_has_a_remediation_or_is_explicitly_none() {
         let samples: Vec<Reason> = vec![
             Reason::ReleaseAgeBelowThreshold {
