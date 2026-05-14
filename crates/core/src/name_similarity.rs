@@ -123,14 +123,7 @@ const POPULAR: &[&str] = &[
 ///     (rule of thumb: ≥100 k weekly downloads), AND
 ///   * a quick search of `npm-advisory-db` shows no historical
 ///     advisory naming it as a squatter.
-const ALLOWLIST: &[&str] = &[
-    "fastly",
-    "nuxt",
-    "preact",
-    "redis",
-    "ulid",
-    "vitest",
-];
+const ALLOWLIST: &[&str] = &["fastly", "nuxt", "preact", "redis", "ulid", "vitest"];
 
 /// Top-level entry point. Returns [`Classification::Ok`] for unscoped
 /// names that are either exact matches or sufficiently far from every

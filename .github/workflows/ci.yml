@@ -35,8 +35,16 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # Pin the installed toolchain to the version in rust-toolchain.toml
+        # (1.86.0). Using @stable lets dtolnay install whatever is current
+        # stable, after which cargo sees the rust-toolchain.toml pin and
+        # tries to invoke rustup to switch — and on the arm64 macos-latest
+        # runner image, `rustup` is shadowed by `rustup-init`, which fails
+        # with "unexpected argument 'build' found". Pinning the install to
+        # match the pin avoids the switch entirely.
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.86.0"
           components: clippy, rustfmt
 
       - name: Cache Cargo registry & build artefacts
