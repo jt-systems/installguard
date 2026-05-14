@@ -131,6 +131,16 @@ pub struct Defaults {
     /// matching can pre-normalise their allowlist.
     #[serde(default)]
     pub license_allowlist: Vec<String>,
+    /// Allowlist of package names (exact match) that should never
+    /// fire [`Reason::NameSquat`]. The detector flags any name
+    /// within Levenshtein-1 of the popular-name list, which
+    /// catches genuine typosquats but also produces false
+    /// positives for legitimate packages whose names happen to
+    /// sit close to a popular one (e.g. `gaxios` — Google's
+    /// official HTTP client — against `axios`). Add the exact
+    /// package name (no version) to suppress the finding.
+    #[serde(default)]
+    pub name_squat_allow: Vec<String>,
     /// When `true`, dependencies whose project-metadata signal
     /// reports the upstream project as archived fire
     /// [`Reason::ProjectArchived`]. Off by default; common in
@@ -445,12 +455,22 @@ impl Policy {
         // Always-on: a near-miss for a popular package is structural
         // evidence, not a user preference. Default severity `block`;
         // demote with `severity.name-squat: warn` for legitimate names
-        // that happen to live close to the popular list.
+        // that happen to live close to the popular list, or suppress
+        // a specific package via `defaults.nameSquatAllow: [name]`
+        // (e.g. `gaxios` is Google's official HTTP client and not a
+        // typosquat of `axios`, despite a Levenshtein distance of 1).
         if let Some((style, target)) = signals.name_squat() {
-            reasons.push(Reason::NameSquat {
-                style: style.to_string(),
-                target: target.to_string(),
-            });
+            if !self
+                .defaults
+                .name_squat_allow
+                .iter()
+                .any(|n| n == &dep.name)
+            {
+                reasons.push(Reason::NameSquat {
+                    style: style.to_string(),
+                    target: target.to_string(),
+                });
+            }
         }
         // ── Maintainer new account ──────────────────────────────────────
         // Threshold-based, opt-in. The provider only emits the signal
@@ -1631,6 +1651,47 @@ mod tests {
             Utc::now(),
         );
         assert!(matches!(d, Decision::Warn { .. }), "got {d:?}");
+    }
+
+    /// `gaxios` is Google's official HTTP client — Levenshtein-1
+    /// from `axios` but not a typosquat. Operators must be able to
+    /// suppress the finding for specific known-legitimate names
+    /// without disabling the detector globally for the whole
+    /// dependency tree.
+    #[test]
+    fn name_squat_suppressed_by_allowlist() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\ndefaults:\n  nameSquatAllow: [gaxios]\n").unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::NameSquat {
+            style: "typo".into(),
+            target: "axios".into(),
+        });
+        let d = p.evaluate(
+            &dep("gaxios", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Allow), "got {d:?}");
+    }
+
+    /// Allowlist must not leak: a different name that is also flagged
+    /// continues to fire even when the allowlist is non-empty.
+    #[test]
+    fn name_squat_allowlist_is_exact_match_only() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\ndefaults:\n  nameSquatAllow: [gaxios]\n").unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::NameSquat {
+            style: "typo".into(),
+            target: "lodash".into(),
+        });
+        let d = p.evaluate(
+            &dep("lodahs", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Block { .. }), "got {d:?}");
     }
 
     #[test]

@@ -11,6 +11,25 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.10] — 2026-05-14
+
+Policy: `defaults.nameSquatAllow` allowlist for the name-squat
+detector. Levenshtein-1 against the popular-name list catches
+typosquats but also produces false positives for legitimate
+packages whose names happen to sit close to a popular one — most
+visibly `gaxios` (Google's official HTTP client) being flagged
+against `axios`. Operators can now suppress specific names
+without disabling the detector globally:
+
+```yaml
+policyVersion: 1
+defaults:
+  nameSquatAllow: [gaxios]
+```
+
+Allowlist is exact-match only — typo-of-an-allowlisted-name still
+fires.
+
 ## [0.1.9] — 2026-05-14
 
 Registry lookup: tolerate `v`-prefixed lockfile versions. Some
