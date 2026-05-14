@@ -40,7 +40,7 @@ jobs:
             runner: ubuntu-latest
             cross: true
           - target: x86_64-apple-darwin
-            runner: macos-13
+            runner: macos-latest
             cross: false
           - target: aarch64-apple-darwin
             runner: macos-latest
@@ -56,6 +56,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      # Belt-and-braces: dtolnay/rust-toolchain's `targets:` parameter has
+      # historically been flaky on cross-arch native builds (e.g. building
+      # x86_64-apple-darwin from an arm64 macos-latest runner). Re-running
+      # the install through rustup directly is idempotent and guarantees
+      # the std component for $matrix.target is present before cargo build.
+      - name: Ensure target std installed
+        if: "!matrix.cross"
+        run: rustup target add ${{ matrix.target }}
 
       - name: Install cross
         if: matrix.cross
