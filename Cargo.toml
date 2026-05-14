@@ -21,6 +21,10 @@ license = "Apache-2.0"
 repository = "https://github.com/jt-systems/installguard"
 homepage = "https://github.com/jt-systems/installguard"
 authors = ["InstallGuard contributors"]
+description = "Policy gate for npm/pnpm/yarn installs: blocks risky dependencies (advisories, low scorecard, brand-new releases, suspicious lifecycle scripts) from CI and dev machines."
+keywords = ["security", "supply-chain", "npm", "ci", "policy"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
 
 [workspace.dependencies]
 # Internal

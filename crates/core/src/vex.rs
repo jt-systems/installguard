@@ -175,7 +175,6 @@ fn statements_for(dep: &ResolvedDependency, decision: &Decision) -> Vec<Statemen
         .collect()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

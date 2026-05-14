@@ -1330,8 +1330,7 @@ fn run_report(args: ReportArgs) -> Result<ExitCode> {
         std::fs::read_to_string(&from)
             .with_context(|| format!("reading summary from {}", from.display()))?
     };
-    let value: serde_json::Value =
-        serde_json::from_str(&raw).context("parsing summary JSON")?;
+    let value: serde_json::Value = serde_json::from_str(&raw).context("parsing summary JSON")?;
     let body = match format {
         ReportFormat::Markdown => render_markdown(&value, max_rows, commit.as_deref(), exit_code),
     };
@@ -1394,10 +1393,7 @@ fn render_markdown(
         .unwrap_or(&empty);
     let flagged: Vec<&serde_json::Value> = decisions
         .iter()
-        .filter(|d| {
-            d.get("decision").and_then(serde_json::Value::as_str)
-                != Some("allow")
-        })
+        .filter(|d| d.get("decision").and_then(serde_json::Value::as_str) != Some("allow"))
         .collect();
 
     if flagged.is_empty() {
@@ -1419,10 +1415,7 @@ fn render_markdown(
                 .unwrap_or("?")
                 .to_uppercase();
             let reason_text = render_reasons_cell(d);
-            let _ = writeln!(
-                out,
-                "| {decision} | `{name}@{version}` | {reason_text} |"
-            );
+            let _ = writeln!(out, "| {decision} | `{name}@{version}` | {reason_text} |");
         }
         if flagged.len() > max_rows {
             let _ = writeln!(
@@ -1519,7 +1512,12 @@ mod tests {
         })
     }
 
-    fn dec(name: &str, version: &str, decision: &str, reasons: &serde_json::Value) -> serde_json::Value {
+    fn dec(
+        name: &str,
+        version: &str,
+        decision: &str,
+        reasons: &serde_json::Value,
+    ) -> serde_json::Value {
         serde_json::json!({
             "name": name,
             "version": version,
@@ -1532,7 +1530,10 @@ mod tests {
     fn report_clean_run_has_marker_table_and_clean_verdict() {
         let doc = summary(&serde_json::json!([]), (12, 12, 0, 0));
         let body = render_markdown(&doc, 50, None, None);
-        assert!(body.starts_with(STICKY_MARKER), "missing sticky marker: {body}");
+        assert!(
+            body.starts_with(STICKY_MARKER),
+            "missing sticky marker: {body}"
+        );
         assert!(body.contains("✅"));
         assert!(body.contains("Clean"));
         assert!(body.contains("| 12 | 12 | 0 | **0** |"));
@@ -1553,9 +1554,14 @@ mod tests {
         let body = render_markdown(&doc, 50, Some("abcdef0123456789"), Some(1));
         assert!(body.contains("🚫"));
         assert!(body.contains("BLOCKED"));
-        assert!(body.contains("| BLOCK | `left-pad@1.0.0` | release age 60m below required minimum 1440m |"));
+        assert!(body.contains(
+            "| BLOCK | `left-pad@1.0.0` | release age 60m below required minimum 1440m |"
+        ));
         assert!(body.contains("· exit 1"));
-        assert!(body.contains("· commit abcdef0"), "short SHA not rendered: {body}");
+        assert!(
+            body.contains("· commit abcdef0"),
+            "short SHA not rendered: {body}"
+        );
     }
 
     #[test]
