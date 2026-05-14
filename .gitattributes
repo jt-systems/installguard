@@ -1,0 +1,23 @@
+# Enforce LF line endings for all text files in the working tree, regardless of
+# host OS. This keeps Windows CI in lockstep with macOS/Linux for golden-file
+# tests (e.g. crates/core/tests/policy_schema.rs which diffs the committed
+# schema against serde-generated output).
+* text=auto eol=lf
+
+# Belt-and-braces: explicitly mark the file types that drove the original CRLF
+# drift in CI.
+*.json   text eol=lf
+*.md     text eol=lf
+*.rs     text eol=lf
+*.toml   text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.sh     text eol=lf
+
+# Binary blobs: never apply text munging.
+*.png    binary
+*.jpg    binary
+*.gif    binary
+*.ico    binary
+*.zip    binary
+*.gz     binary
