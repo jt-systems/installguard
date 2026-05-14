@@ -169,8 +169,12 @@ struct ScanArgs {
     #[command(flatten)]
     common: EvalArgs,
 
-    /// Output format.
-    #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+    /// Output format. `pretty` is the default for interactive
+    /// terminals: a grouped, ANSI-coloured summary that uses each
+    /// reason's human-readable phrasing. `human` is the legacy
+    /// one-line-per-decision format kept for scripts that grep its
+    /// output. `json` matches the `ci` summary shape.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Pretty)]
     format: OutputFormat,
 }
 
@@ -337,7 +341,11 @@ enum ReportFormat {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum OutputFormat {
+    /// Grouped, ANSI-coloured summary intended for interactive terminals.
+    Pretty,
+    /// Legacy one-line-per-decision text format.
     Human,
+    /// Machine-readable JSON matching the `ci` summary shape.
     Json,
 }
 
@@ -1125,6 +1133,7 @@ fn build_lock(args: &EvalArgs, out: &EvalOutput) -> Result<InstallguardLock> {
 async fn run_scan(args: ScanArgs) -> Result<ExitCode> {
     let out = evaluate(&args.common).await?;
     match args.format {
+        OutputFormat::Pretty => emit_pretty(&out.results, color_choice()),
         OutputFormat::Human => emit_human(&out.results),
         OutputFormat::Json => {
             let payload = build_json_summary(&out);
@@ -1168,6 +1177,156 @@ fn fmt_reasons(reasons: &[Reason]) -> String {
         .map(|r| serde_json::to_string(r).unwrap_or_else(|_| "<unencodable>".into()))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+// ── Pretty terminal output ─────────────────────────────────────────────────
+//
+// Terminal-friendly grouped summary used by `installguard scan` when
+// `--format pretty` (the default for TTYs). Reuses the canonical
+// `Reason::human_summary()` so the wording stays in sync with PR
+// comments and audit-log lines.
+
+#[derive(Debug, Clone, Copy)]
+enum ColorChoice {
+    Auto,
+    Never,
+}
+
+impl ColorChoice {
+    fn enabled(self) -> bool {
+        matches!(self, Self::Auto)
+    }
+}
+
+/// Honour the conventional `NO_COLOR` env var (https://no-color.org)
+/// and disable colour when stdout is not a TTY (e.g. piped to `less`
+/// or redirected to a file).
+fn color_choice() -> ColorChoice {
+    use std::io::IsTerminal;
+    if std::env::var_os("NO_COLOR").is_some() {
+        return ColorChoice::Never;
+    }
+    if std::io::stdout().is_terminal() {
+        ColorChoice::Auto
+    } else {
+        ColorChoice::Never
+    }
+}
+
+const ANSI_RESET: &str = "\x1b[0m";
+const ANSI_BOLD: &str = "\x1b[1m";
+const ANSI_DIM: &str = "\x1b[2m";
+const ANSI_RED: &str = "\x1b[31m";
+const ANSI_YELLOW: &str = "\x1b[33m";
+const ANSI_GREEN: &str = "\x1b[32m";
+
+fn emit_pretty(results: &[DepResult], color: ColorChoice) {
+    use std::io::Write as _;
+    let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
+    write_pretty(&mut stdout, results, color).ok();
+    stdout.flush().ok();
+}
+
+fn write_pretty<W: std::io::Write>(
+    out: &mut W,
+    results: &[DepResult],
+    color: ColorChoice,
+) -> std::io::Result<()> {
+    let counts = Counts::from(results);
+    let (icon, verdict, verdict_colour) = if counts.block > 0 {
+        ("✗", "BLOCKED", ANSI_RED)
+    } else if counts.warn > 0 {
+        ("!", "Warnings", ANSI_YELLOW)
+    } else {
+        ("✓", "Clean", ANSI_GREEN)
+    };
+
+    writeln!(
+        out,
+        "{} InstallGuard — {}",
+        paint(icon, verdict_colour, color),
+        paint_bold(verdict, verdict_colour, color),
+    )?;
+    writeln!(
+        out,
+        "  {} packages — {} allow · {} warn · {} block",
+        results.len(),
+        counts.allow,
+        paint(&counts.warn.to_string(), ANSI_YELLOW, color),
+        paint(&counts.block.to_string(), ANSI_RED, color),
+    )?;
+
+    let blocks: Vec<&DepResult> = results
+        .iter()
+        .filter(|r| matches!(r.decision, Decision::Block { .. }))
+        .collect();
+    let warns: Vec<&DepResult> = results
+        .iter()
+        .filter(|r| matches!(r.decision, Decision::Warn { .. }))
+        .collect();
+
+    if !blocks.is_empty() {
+        writeln!(out)?;
+        writeln!(out, "{}", paint_bold("BLOCK", ANSI_RED, color))?;
+        for r in &blocks {
+            write_pretty_entry(out, r, ANSI_RED, color)?;
+        }
+    }
+    if !warns.is_empty() {
+        writeln!(out)?;
+        writeln!(out, "{}", paint_bold("WARN", ANSI_YELLOW, color))?;
+        for r in &warns {
+            write_pretty_entry(out, r, ANSI_YELLOW, color)?;
+        }
+    }
+
+    if blocks.is_empty() && warns.is_empty() && !results.is_empty() {
+        writeln!(out)?;
+        writeln!(
+            out,
+            "  {}",
+            paint(
+                &format!("All {} dependencies passed policy.", results.len()),
+                ANSI_DIM,
+                color,
+            )
+        )?;
+    }
+    Ok(())
+}
+
+fn write_pretty_entry<W: std::io::Write>(
+    out: &mut W,
+    r: &DepResult,
+    accent: &str,
+    color: ColorChoice,
+) -> std::io::Result<()> {
+    let reasons = match &r.decision {
+        Decision::Block { reasons } | Decision::Warn { reasons } => reasons.as_slice(),
+        Decision::Allow => &[],
+    };
+    let header = format!("{}@{}", r.dep.name, r.dep.version);
+    writeln!(out, "  {}", paint_bold(&header, accent, color))?;
+    for reason in reasons {
+        writeln!(out, "    • {}", reason.human_summary())?;
+    }
+    Ok(())
+}
+
+fn paint(s: &str, code: &str, color: ColorChoice) -> String {
+    if color.enabled() {
+        format!("{code}{s}{ANSI_RESET}")
+    } else {
+        s.to_string()
+    }
+}
+
+fn paint_bold(s: &str, code: &str, color: ColorChoice) -> String {
+    if color.enabled() {
+        format!("{ANSI_BOLD}{code}{s}{ANSI_RESET}")
+    } else {
+        s.to_string()
+    }
 }
 
 // ── `ci` subcommand ─────────────────────────────────────────────────────────
@@ -1501,6 +1660,90 @@ mod tests {
     #[test]
     fn workflow_data_keeps_colons_and_commas() {
         assert_eq!(escape_workflow_data("a:b,c\nd%e"), "a:b,c%0Ad%25e");
+    }
+
+    // ── Pretty output ──────────────────────────────────────────────────
+
+    fn dep_result(name: &str, version: &str, decision: Decision) -> DepResult {
+        use installguard_core::dependency::{Ecosystem, Source};
+        DepResult {
+            dep: ResolvedDependency {
+                ecosystem: Ecosystem::Npm,
+                name: name.into(),
+                version: version.into(),
+                integrity: None,
+                source: Source::Registry {
+                    url: "https://registry.npmjs.org".into(),
+                },
+                direct: true,
+                requested_by: Vec::new(),
+            },
+            decision,
+            signals: SignalSet::default(),
+        }
+    }
+
+    fn render_pretty(results: &[DepResult]) -> String {
+        let mut buf: Vec<u8> = Vec::new();
+        write_pretty(&mut buf, results, ColorChoice::Never).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn pretty_clean_run_shows_clean_verdict_without_block_or_warn_sections() {
+        let results = vec![dep_result("ok", "1.0.0", Decision::Allow)];
+        let body = render_pretty(&results);
+        assert!(body.contains("Clean"), "missing Clean verdict: {body}");
+        assert!(!body.contains("BLOCK\n"));
+        assert!(!body.contains("WARN\n"));
+        assert!(body.contains("All 1 dependencies passed policy."));
+    }
+
+    #[test]
+    fn pretty_groups_block_and_warn_with_human_summary_reasons() {
+        let block = Decision::Block {
+            reasons: vec![Reason::DisallowedLifecycleScript {
+                script: "postinstall".into(),
+            }],
+        };
+        let warn = Decision::Warn {
+            reasons: vec![Reason::PublishedAtUnknown],
+        };
+        let results = vec![
+            dep_result("danger", "1.2.3", block),
+            dep_result("nag", "0.0.1", warn),
+            dep_result("fine", "1.0.0", Decision::Allow),
+        ];
+        let body = render_pretty(&results);
+
+        // Counts line
+        assert!(body.contains("3 packages"));
+        assert!(body.contains("1 allow"));
+        assert!(body.contains("1 warn"));
+        assert!(body.contains("1 block"));
+
+        // Section headers
+        assert!(body.contains("BLOCK"));
+        assert!(body.contains("WARN"));
+
+        // Per-entry headers and human-readable reason text
+        assert!(body.contains("danger@1.2.3"));
+        assert!(body.contains("install-time lifecycle script `postinstall` declared"));
+        assert!(body.contains("nag@0.0.1"));
+        assert!(body.contains("registry did not return a published-at timestamp"));
+
+        // Allowed entries are not listed individually
+        assert!(!body.contains("fine@1.0.0"));
+
+        // Color was disabled, so no ANSI escapes leaked through.
+        assert!(!body.contains('\x1b'));
+    }
+
+    #[test]
+    fn pretty_color_choice_honours_no_color_env() {
+        // `paint` should pass-through when colour is disabled.
+        assert_eq!(paint("hi", ANSI_RED, ColorChoice::Never), "hi");
+        assert!(paint("hi", ANSI_RED, ColorChoice::Auto).contains("\x1b[31m"));
     }
 
     fn summary(decisions: &serde_json::Value, totals: (u64, u64, u64, u64)) -> serde_json::Value {
