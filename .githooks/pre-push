@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Pre-push gate for InstallGuard.
+#
+# Runs the same checks that CI runs, locally, before the push leaves
+# your machine. The schema-snapshot test in particular has caught us
+# more than once mid-release; gating here means the failure surfaces
+# in your terminal in 30 s instead of in CI five minutes later.
+#
+# Activated by the in-tree hooks path:
+#   git config core.hooksPath .githooks
+# (Run once after cloning. The repo's own setup recipe wires this.)
+#
+# Bypass for genuine emergencies:
+#   git push --no-verify
+# (Don't make a habit of it. CI will still fail.)
+
+set -euo pipefail
+
+if [[ "${INSTALLGUARD_SKIP_PRE_PUSH:-0}" == "1" ]]; then
+  echo "pre-push: skipped (INSTALLGUARD_SKIP_PRE_PUSH=1)"
+  exit 0
+fi
+
+# Skip when nothing local-only is being pushed (e.g. pushing tags
+# only, or a branch already in sync). Stdin format documented in
+# githooks(5): `<local ref> <local sha> <remote ref> <remote sha>`.
+have_commits_to_push=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [[ -z "${local_sha:-}" ]] && continue
+  if [[ "${local_sha}" != "0000000000000000000000000000000000000000" ]]; then
+    have_commits_to_push=1
+  fi
+done
+
+if [[ "${have_commits_to_push}" -eq 0 ]]; then
+  exit 0
+fi
+
+start=$(date +%s)
+echo "pre-push: cargo fmt --check"
+cargo fmt --all -- --check
+
+echo "pre-push: cargo clippy --workspace --all-targets --locked -- -D warnings"
+cargo clippy --workspace --all-targets --locked -- -D warnings
+
+echo "pre-push: cargo test --workspace --locked"
+cargo test --workspace --locked
+
+elapsed=$(( $(date +%s) - start ))
+echo "pre-push: ok (${elapsed}s)"

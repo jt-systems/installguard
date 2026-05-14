@@ -38,6 +38,20 @@ cargo fmt   --all -- --check
 
 All four must pass before a PR is merged. CI enforces this.
 
+### Local pre-push gate (recommended)
+
+Run once after cloning to enable the in-tree git hook that runs the
+same four checks before each `git push`:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook lives at `.githooks/pre-push`, runs `fmt --check`, `clippy
+-D warnings`, and the full `cargo test` suite, and is the same gate
+CI runs. Bypass with `git push --no-verify` or
+`INSTALLGUARD_SKIP_PRE_PUSH=1 git push` for genuine emergencies.
+
 ### Adding a lockfile adapter
 
 Implement the `LockfileAdapter` trait in `crates/adapters/<eco>/`. Provide:
