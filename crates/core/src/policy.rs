@@ -406,9 +406,13 @@ impl Policy {
             }
         }
         // ── Dist-tag anomaly ────────────────────────────────────────────
-        // Always-on: "latest moved backwards" is never a normal
-        // operation and the signal is purely structural. Default
-        // severity `block`; demote with `severity.dist-tag-anomaly: warn`.
+        // Always-on: "latest moved backwards" is structurally
+        // unusual but rarely an attack on its own — it most
+        // commonly indicates a maintainer running an LTS line as
+        // `latest` while a newer major exists on a separate tag.
+        // Default severity `warn`; promote with
+        // `severity.dist-tag-anomaly: block` if your supply-chain
+        // policy treats every backwards-moving tag as suspect.
         //
         // Suppression: if the resolved dependency is itself on the
         // version that `latest` points at, the anomaly does not
@@ -584,15 +588,19 @@ impl Policy {
     }
 
     /// Resolve the effective severity for a reason. Defaults are `Block`
-    /// for everything except [`Reason::LifecycleScriptIgnored`], which
-    /// defaults to `Warn` (the script can't run during install but a later
-    /// `npm rebuild` would). The policy's `severity` map overrides either.
+    /// for everything except [`Reason::LifecycleScriptIgnored`] and
+    /// [`Reason::DistTagAnomaly`], which default to `Warn` — the
+    /// former because the script can't run during install (a later
+    /// `npm rebuild` would), and the latter because a backwards-
+    /// moving `latest` tag is most often a deliberate LTS-line
+    /// policy rather than an attack. The policy's `severity` map
+    /// overrides either.
     fn severity_for(&self, r: &Reason) -> Severity {
         if let Some(s) = self.severity.get(r.code()).copied() {
             return s;
         }
         match r {
-            Reason::LifecycleScriptIgnored { .. } => Severity::Warn,
+            Reason::LifecycleScriptIgnored { .. } | Reason::DistTagAnomaly { .. } => Severity::Warn,
             _ => Severity::Block,
         }
     }
@@ -1430,7 +1438,7 @@ mod tests {
     }
 
     #[test]
-    fn dist_tag_anomaly_blocks_by_default() {
+    fn dist_tag_anomaly_warns_by_default() {
         let p = Policy::default();
         let mut signals = SignalSet::default();
         signals.push(Signal::DistTagAnomaly {
@@ -1443,18 +1451,18 @@ mod tests {
             Utc::now(),
         );
         match d {
-            Decision::Block { reasons } => {
+            Decision::Warn { reasons } => {
                 assert_eq!(reasons.len(), 1);
                 assert_eq!(reasons[0].code(), "dist-tag-anomaly");
             }
-            other => panic!("expected Block, got {other:?}"),
+            other => panic!("expected Warn, got {other:?}"),
         }
     }
 
     #[test]
-    fn dist_tag_anomaly_demotable_to_warn() {
+    fn dist_tag_anomaly_promotable_to_block() {
         let p =
-            Policy::from_yaml("policyVersion: 1\nseverity:\n  dist-tag-anomaly: warn\n").unwrap();
+            Policy::from_yaml("policyVersion: 1\nseverity:\n  dist-tag-anomaly: block\n").unwrap();
         let mut signals = SignalSet::default();
         signals.push(Signal::DistTagAnomaly {
             latest_version: "1.1.0".into(),
@@ -1465,7 +1473,7 @@ mod tests {
             &signals,
             Utc::now(),
         );
-        assert!(matches!(d, Decision::Warn { .. }), "got {d:?}");
+        assert!(matches!(d, Decision::Block { .. }), "got {d:?}");
     }
 
     /// `attr-accept@2.2.5` shipped in real lockfiles with

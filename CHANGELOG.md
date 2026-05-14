@@ -11,6 +11,17 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-05-14
+
+Policy: `dist-tag-anomaly` default severity demoted from `block`
+to `warn`. A backwards-moving `latest` tag is structurally unusual
+but most often indicates a maintainer running an LTS line as
+`latest` while a newer major exists on a separate tag (e.g.
+`error-stack-parser` keeping 2.x as `latest` while 3.x is
+published) — not an active attack. Operators who treat every
+backwards tag as suspect can promote with
+`severity.dist-tag-anomaly: block` in `installguard.yaml`.
+
 ## [0.1.5] — 2026-05-14
 
 Bugfix: the per-reason `↳` remediation hint promised in 0.1.4
