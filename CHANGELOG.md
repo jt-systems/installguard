@@ -11,6 +11,19 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.7] — 2026-05-14
+
+Policy: `signal-unavailable` default severity demoted from
+`block` to `warn`. A provider failing to answer ("the npm
+registry timed out", "the OSV API returned 503", "the
+package was 404 because it's a private workspace package") is
+not evidence of compromise — absence of evidence is not
+evidence of attack. Real-world scans against monorepos and
+networks with flaky egress were producing dozens of blocks per
+run for transient or structural reasons. Operators who want
+strict-fail-closed semantics can promote with
+`severity.signal-unavailable: block` in `installguard.yaml`.
+
 ## [0.1.6] — 2026-05-14
 
 Policy: `dist-tag-anomaly` default severity demoted from `block`

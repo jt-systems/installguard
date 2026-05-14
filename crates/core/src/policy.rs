@@ -587,20 +587,30 @@ impl Policy {
         }
     }
 
-    /// Resolve the effective severity for a reason. Defaults are `Block`
-    /// for everything except [`Reason::LifecycleScriptIgnored`] and
-    /// [`Reason::DistTagAnomaly`], which default to `Warn` — the
-    /// former because the script can't run during install (a later
-    /// `npm rebuild` would), and the latter because a backwards-
-    /// moving `latest` tag is most often a deliberate LTS-line
-    /// policy rather than an attack. The policy's `severity` map
-    /// overrides either.
+    /// Resolve the effective severity for a reason. Default is `Block`
+    /// for everything except a small set of reasons that are noisy or
+    /// non-attack-shaped by default and should not fail an install on
+    /// their own:
+    ///
+    /// - [`Reason::LifecycleScriptIgnored`] — the script can't run
+    ///   during install (a later `npm rebuild` would).
+    /// - [`Reason::DistTagAnomaly`] — a backwards-moving `latest`
+    ///   tag is most often a deliberate LTS-line policy rather than
+    ///   an attack.
+    /// - [`Reason::SignalUnavailable`] — the provider failed to
+    ///   answer; absence of evidence is not evidence of compromise.
+    ///   Operators who want strict-fail-closed semantics can promote
+    ///   with `severity.signal-unavailable: block`.
+    ///
+    /// The policy's `severity` map overrides any default.
     fn severity_for(&self, r: &Reason) -> Severity {
         if let Some(s) = self.severity.get(r.code()).copied() {
             return s;
         }
         match r {
-            Reason::LifecycleScriptIgnored { .. } | Reason::DistTagAnomaly { .. } => Severity::Warn,
+            Reason::LifecycleScriptIgnored { .. }
+            | Reason::DistTagAnomaly { .. }
+            | Reason::SignalUnavailable { .. } => Severity::Warn,
             _ => Severity::Block,
         }
     }
@@ -1467,6 +1477,49 @@ mod tests {
         signals.push(Signal::DistTagAnomaly {
             latest_version: "1.1.0".into(),
             highest_published: "2.0.0".into(),
+        });
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Block { .. }), "got {d:?}");
+    }
+
+    /// A `Signal::Unavailable` (provider failed) must not fail an
+    /// install on its own — absence of evidence is not evidence of
+    /// compromise. Operators who want strict-fail-closed semantics
+    /// can promote with `severity.signal-unavailable: block`.
+    #[test]
+    fn signal_unavailable_warns_by_default() {
+        let p = Policy::default();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::Unavailable {
+            provider: "npm-registry".into(),
+            reason: "HTTP 503".into(),
+        });
+        let d = p.evaluate(
+            &dep("foo", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        match d {
+            Decision::Warn { reasons } => {
+                assert_eq!(reasons.len(), 1);
+                assert_eq!(reasons[0].code(), "signal-unavailable");
+            }
+            other => panic!("expected Warn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn signal_unavailable_promotable_to_block() {
+        let p = Policy::from_yaml("policyVersion: 1\nseverity:\n  signal-unavailable: block\n")
+            .unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::Unavailable {
+            provider: "npm-registry".into(),
+            reason: "HTTP 503".into(),
         });
         let d = p.evaluate(
             &dep("foo", false, Source::Registry { url: "x".into() }),
