@@ -37,4 +37,4 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 futures = { workspace = true }
-dirs = "5.0"
+dirs = "6.0"
