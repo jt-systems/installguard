@@ -568,6 +568,34 @@ fn encode_name(name: &str) -> String {
     name.replacen('/', "%2F", 1)
 }
 
+/// Deserialize `versions[v].deprecated`, accepting either a string
+/// (the documented shape — the value is the deprecation message) or
+/// any non-string JSON value (which we treat as "not deprecated").
+///
+/// Some major packages on the npm registry ship `"deprecated": false`
+/// when not deprecated (react 19.x, react-dom 19.x, scheduler 0.25+,
+/// react-is, react-reconciler, …). The default `Option<String>`
+/// deserializer rejected `false` with a hard `invalid type: boolean`
+/// error, which propagated as `decode: error decoding response body`
+/// and forced every affected package into `Signal::Unavailable` —
+/// effectively blocking core React installs unconditionally.
+///
+/// We tolerate the wire bug rather than reject it: false / null /
+/// numbers / objects / arrays all coerce to `None` (= not
+/// deprecated). Strings — including the empty string — round-trip
+/// unchanged so [`build_deprecated_signal`]'s existing semantics
+/// (presence of any string is the deprecation marker) are preserved.
+fn deserialize_deprecated<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(match value {
+        serde_json::Value::String(s) => Some(s),
+        _ => None,
+    })
+}
+
 #[derive(Debug, Deserialize)]
 struct Packument {
     #[serde(default)]
@@ -589,9 +617,17 @@ struct VersionMeta {
     #[serde(default, rename = "_npmUser")]
     npm_user: Option<NpmUser>,
     /// `deprecated` is a free-form string set by `npm deprecate`. The
-    /// presence of the field — even with an empty value — is the
-    /// deprecation marker. Absence means "not deprecated".
-    #[serde(default)]
+    /// presence of a *non-empty string* is the deprecation marker;
+    /// absence (or any non-string value) means "not deprecated".
+    ///
+    /// Some packages on the registry — `react@19.x`, `react-dom@19.x`,
+    /// `scheduler@0.25+` and others — ship `"deprecated": false` on
+    /// the wire (a JSON boolean) when *not* deprecated. The npm spec
+    /// only documents string-or-absent, but in practice the registry
+    /// returns booleans here too. We accept either by deserialising
+    /// through a permissive helper that maps any non-string into
+    /// `None`.
+    #[serde(default, deserialize_with = "deserialize_deprecated")]
     deprecated: Option<String>,
     /// `bin` may be either a map of `{ name: path }` or a single string
     /// (whose key is the package name). We normalise via
@@ -697,6 +733,62 @@ mod tests {
             }
             other => panic!("unexpected signal {other:?}"),
         }
+    }
+
+    /// Regression for v0.1.0 production bug — `react@19.x`,
+    /// `react-dom@19.x`, `scheduler@0.25+`, `react-is`, and
+    /// `react-reconciler` ship `"deprecated": false` on the wire,
+    /// which the default `Option<String>` deserializer rejected as
+    /// `invalid type: boolean`. The error propagated as
+    /// `decode: error decoding response body` and turned every
+    /// install of these packages into a hard
+    /// `Signal::Unavailable` block. The custom
+    /// [`deserialize_deprecated`] now coerces non-strings to `None`.
+    #[test]
+    fn packument_with_boolean_deprecated_decodes() {
+        let body = r#"{
+          "dist-tags": {"latest": "19.1.1"},
+          "time": {"19.1.1": "2026-04-01T12:00:00Z"},
+          "versions": {
+            "19.1.1": {
+              "deprecated": false,
+              "dist": {"integrity": "sha512-abc"}
+            }
+          }
+        }"#;
+        let p: Packument = serde_json::from_str(body).expect("decodes");
+        let v = p.versions.get("19.1.1").expect("version present");
+        assert!(v.deprecated.is_none(), "false should coerce to None");
+    }
+
+    #[test]
+    fn packument_with_null_deprecated_decodes() {
+        let body = r#"{
+          "versions": {"1.0.0": {"deprecated": null}}
+        }"#;
+        let p: Packument = serde_json::from_str(body).expect("decodes");
+        assert!(p.versions["1.0.0"].deprecated.is_none());
+    }
+
+    #[test]
+    fn packument_with_string_deprecated_round_trips() {
+        let body = r#"{
+          "versions": {"1.0.0": {"deprecated": "use foo@2 instead"}}
+        }"#;
+        let p: Packument = serde_json::from_str(body).expect("decodes");
+        assert_eq!(
+            p.versions["1.0.0"].deprecated.as_deref(),
+            Some("use foo@2 instead")
+        );
+    }
+
+    #[test]
+    fn packument_with_empty_string_deprecated_preserves_marker() {
+        // Empty string on the wire is the "deprecated, no message"
+        // marker — see deprecation_empty_string_is_marker_with_no_message.
+        let body = r#"{"versions": {"1.0.0": {"deprecated": ""}}}"#;
+        let p: Packument = serde_json::from_str(body).expect("decodes");
+        assert_eq!(p.versions["1.0.0"].deprecated.as_deref(), Some(""));
     }
 
     #[test]
