@@ -21,13 +21,26 @@ use std::sync::Mutex;
 const DEFAULT_REGISTRY: &str = "https://registry.npmjs.org";
 const USER_AGENT: &str = concat!("installguard/", env!("CARGO_PKG_VERSION"));
 
-/// Lifecycle script names treated as security-relevant.
-/// `prepare` runs on `npm install` from a git source — included.
+/// Lifecycle script names treated as security-relevant for
+/// **registry-sourced** dependencies.
+///
+/// Notably absent: `prepare`. The npm registry runs `prepare`
+/// **only** when a package is installed from a git source (so the
+/// consumer can compile the source tree on the fly). When the same
+/// package is installed from the registry, npm uses the
+/// pre-published tarball and never invokes `prepare`. Reporting
+/// `prepare` for registry deps therefore generates noise on every
+/// package that defines a build-time `prepare` script (Husky,
+/// TypeScript libraries, etc.) without flagging anything that can
+/// actually execute on the user's machine.
+///
+/// Git-sourced dependencies are gated separately by the
+/// `Source::Git` rules in policy.rs; the npm registry adapter
+/// only ever sees registry packuments.
 const LIFECYCLE_SCRIPTS: &[&str] = &[
     "preinstall",
     "install",
     "postinstall",
-    "prepare",
     "preuninstall",
     "postuninstall",
 ];
@@ -994,6 +1007,22 @@ mod tests {
         );
         let p = surface_pkmt(prior, current);
         assert!(detect_version_surface_change(&p, "1.0.1").is_none());
+    }
+
+    #[test]
+    fn prepare_is_not_a_registry_lifecycle_script() {
+        // The npm registry adapter never sees git-source installs, so
+        // `prepare` (which only runs on `npm install <git-url>`) must
+        // not be reported for registry packuments. See LIFECYCLE_SCRIPTS
+        // for the rationale.
+        assert!(!LIFECYCLE_SCRIPTS.contains(&"prepare"));
+        // The traditional install-time hooks must still be present.
+        for s in ["preinstall", "install", "postinstall"] {
+            assert!(
+                LIFECYCLE_SCRIPTS.contains(&s),
+                "{s} missing from LIFECYCLE_SCRIPTS"
+            );
+        }
     }
 
     fn pkmt_with_dist_tags(versions: &[&str], dist_tags: &[(&str, &str)]) -> Packument {
