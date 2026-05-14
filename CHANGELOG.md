@@ -11,6 +11,15 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-05-14
+
+Bugfix: the per-reason `↳` remediation hint promised in 0.1.4
+was wired into `Reason::remediation()` but never rendered —
+the call site in `write_pretty_entry` was lost in a rebase.
+Restored, so each finding now actually prints its hint
+immediately under the bullet. The "Next steps" footer was
+unaffected and shipped correctly in 0.1.4.
+
 ## [0.1.4] — 2026-05-14
 
 Scan UX: actionable next-steps. A blocked install is only useful

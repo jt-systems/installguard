@@ -1365,6 +1365,13 @@ fn write_pretty_entry<W: std::io::Write>(
     writeln!(out, "  {}", paint_bold(&header, accent, color))?;
     for reason in reasons {
         writeln!(out, "    • {}", reason.human_summary())?;
+        if let Some(hint) = reason.remediation() {
+            writeln!(
+                out,
+                "      {}",
+                paint(&format!("\u{21b3} {hint}"), ANSI_DIM, color)
+            )?;
+        }
     }
     Ok(())
 }
