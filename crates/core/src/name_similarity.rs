@@ -108,6 +108,30 @@ const POPULAR: &[&str] = &[
     "zod",
 ];
 
+/// Curated allow-list of well-known legitimate packages whose names
+/// happen to land within Damerau-Levenshtein distance 1 of an entry
+/// in [`POPULAR`]. Without this list the `ulid` → `uuid`,
+/// `nuxt` → `next`, and `preact` → `react` distance-1 collisions
+/// fire as typo squats on every real-world scan, drowning out the
+/// genuine catches.
+///
+/// Sorted for `binary_search`. Names here are *only* exempt from
+/// classification — they are not promoted to typosquat targets.
+/// Add a name only when:
+///
+///   * it has a non-trivial install footprint on npm
+///     (rule of thumb: ≥100 k weekly downloads), AND
+///   * a quick search of `npm-advisory-db` shows no historical
+///     advisory naming it as a squatter.
+const ALLOWLIST: &[&str] = &[
+    "fastly",
+    "nuxt",
+    "preact",
+    "redis",
+    "ulid",
+    "vitest",
+];
+
 /// Top-level entry point. Returns [`Classification::Ok`] for unscoped
 /// names that are either exact matches or sufficiently far from every
 /// popular name; otherwise the variant carries the suspected target
@@ -123,6 +147,12 @@ pub fn classify(name: &str) -> Classification {
 
     // 1. Exact match → it *is* the popular package; not suspicious.
     if POPULAR.binary_search(&lower.as_str()).is_ok() {
+        return Classification::Ok;
+    }
+
+    // 1b. Curated allow-list of well-known packages that collide
+    //     with POPULAR within distance 1. See [`ALLOWLIST`].
+    if ALLOWLIST.binary_search(&lower.as_str()).is_ok() {
         return Classification::Ok;
     }
 
@@ -360,5 +390,28 @@ mod tests {
         } else {
             panic!();
         }
+    }
+
+    #[test]
+    fn allowlisted_packages_are_not_flagged() {
+        // Each of these is exactly distance-1 from a POPULAR entry
+        // and would otherwise be classified as a typosquat:
+        //   ulid   ↔ uuid   (substitution at index 1)
+        //   nuxt   ↔ next   (substitution at index 1)
+        //   preact ↔ react  (insertion of leading 'p')
+        for legit in ["ulid", "nuxt", "preact", "redis", "vitest", "fastly"] {
+            assert_eq!(
+                classify(legit),
+                Classification::Ok,
+                "{legit} must not be flagged as a squat"
+            );
+        }
+    }
+
+    #[test]
+    fn allowlist_is_sorted_for_binary_search() {
+        let mut sorted = super::ALLOWLIST.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(sorted, super::ALLOWLIST);
     }
 }
