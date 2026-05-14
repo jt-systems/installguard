@@ -11,6 +11,17 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+### Fixed
+
+- Bumped the on-disk signal cache `SCHEMA_VERSION` from 1 to 2 so
+  caches written by v0.1.0 / v0.1.1 are invalidated automatically
+  on first use under v0.1.2. Without this bump, the v0.1.1 binary
+  still surfaced stale `prepare` lifecycle-script blocks and stale
+  `signal provider "npm-registry" unavailable: decode: …` warnings
+  for any package whose packument was fetched and cached under the
+  pre-fix code paths. The schema-version check that drops mismatched
+  entries was already in place; only the constant needed bumping.
+
 ## [0.1.1] — 2026-05-14
 
 First maintenance release. Reduces noise from real-world scans,

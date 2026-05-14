@@ -43,8 +43,23 @@ impl Default for Ttl {
     }
 }
 
-/// Schema version stamped into every value. Bumped on breaking changes.
-const SCHEMA_VERSION: u32 = 1;
+/// Schema version stamped into every value. Bump whenever the *content*
+/// of cached signals changes in a way that would mislead the policy
+/// engine if read back verbatim — e.g. when a signal that was previously
+/// emitted is no longer emitted, or when a signal's field semantics
+/// change. Pure additive changes (a new `Signal` variant) do not need
+/// a bump because old entries simply won't carry the new variant.
+///
+/// History:
+///   1 — initial release (v0.1.0).
+///   2 — v0.1.2: `npm-registry` no longer emits `LifecycleScripts` for
+///       `prepare` (registry tarballs never run it) and tolerates
+///       non-string `deprecated` packument fields. Caches written by
+///       v0.1.0 / v0.1.1 contain stale `prepare` entries and stale
+///       `Unavailable { provider: "npm-registry" }` entries for any
+///       package whose packument hit the decode bug; bumping forces a
+///       refetch on first use under v0.1.2.
+const SCHEMA_VERSION: u32 = 2;
 /// Sled tree name. Changing this implicitly invalidates older caches.
 const TREE_NAME: &str = "signals_v1";
 
