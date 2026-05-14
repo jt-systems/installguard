@@ -11,6 +11,34 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-05-14
+
+Scan UX: actionable next-steps. A blocked install is only useful
+if the operator knows what to do about it. Each finding now
+carries a one-line remediation hint specific to its signal class
+(e.g. `name-squat` → "verify you meant this package, not the
+popular one it resembles"; `suspicious-script` → "treat as
+suspected supply-chain attack; do NOT install — report to npm
+security"), and the pretty output ends with a generic four-bullet
+"Next steps" footer pointing at investigation, allowlisting,
+freezing, and reporting paths.
+
+### Added
+
+- `Reason::remediation()` returns an `Option<&'static str>` short
+  hint per variant. Exhaustive `match` keeps the table honest:
+  adding a new `Reason` is a compile error in
+  `every_reason_variant_has_a_remediation_or_is_explicitly_none`
+  until its remediation is considered. Hints are capped at ~100
+  chars to fit one terminal line.
+- Pretty CLI output (`scan`/`ci`/`lock`/`attest`) now renders a
+  dim `↳ <hint>` line under each finding, plus a "Next steps"
+  footer when blocks or warns are present. The footer carries a
+  concrete registry URL for the first blocked package so the
+  operator can click straight through to investigate.
+- The footer is suppressed on clean scans and respects the same
+  `NO_COLOR` / non-TTY rules as the rest of the pretty output.
+
 ## [0.1.3] — 2026-05-14
 
 Scan UX: live progress indicator. The `evaluate` phase used to

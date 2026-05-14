@@ -1299,6 +1299,52 @@ fn write_pretty<W: std::io::Write>(
             )
         )?;
     }
+
+    if !blocks.is_empty() || !warns.is_empty() {
+        write_pretty_footer(out, &blocks, color)?;
+    }
+    Ok(())
+}
+
+/// Universal next-steps footer rendered after the per-package list.
+/// Stays generic (the per-reason `\u{21b3}` hints carry the
+/// signal-specific advice) and points the operator at the four
+/// most common follow-ups: investigate, allowlist, freeze, report.
+fn write_pretty_footer<W: std::io::Write>(
+    out: &mut W,
+    blocks: &[&DepResult],
+    color: ColorChoice,
+) -> std::io::Result<()> {
+    writeln!(out)?;
+    writeln!(out, "{}", paint_bold("Next steps", ANSI_BOLD, color))?;
+    if let Some(first) = blocks.first() {
+        let url = format!(
+            "https://www.npmjs.com/package/{}/v/{}",
+            first.dep.name, first.dep.version
+        );
+        writeln!(
+            out,
+            "  \u{2022} Investigate the package on its registry page (e.g. {})",
+            paint(&url, ANSI_DIM, color)
+        )?;
+    } else {
+        writeln!(out, "  \u{2022} Investigate each finding on its registry page")?;
+    }
+    writeln!(
+        out,
+        "  \u{2022} If intentional, allowlist in {} (see `installguard schema`)",
+        paint("installguard.yaml", ANSI_DIM, color),
+    )?;
+    writeln!(
+        out,
+        "  \u{2022} Once green, freeze decisions with {} for reproducible CI",
+        paint("`installguard lock`", ANSI_DIM, color),
+    )?;
+    writeln!(
+        out,
+        "  \u{2022} If you believe this is a real attack, report to {}",
+        paint("https://github.com/advisories/new", ANSI_DIM, color),
+    )?;
     Ok(())
 }
 

@@ -280,6 +280,76 @@ impl Reason {
             }
         }
     }
+
+    /// Short, action-oriented hint to render under each finding in
+    /// the pretty CLI output. Returns `None` for variants where there
+    /// is no useful generic guidance beyond the universal footer
+    /// (e.g. `SignalUnavailable` is operational, not actionable per
+    /// dependency). Wording stays under ~80 chars so it fits one
+    /// terminal line at typical widths.
+    #[must_use]
+    pub fn remediation(&self) -> Option<&'static str> {
+        match self {
+            Self::ReleaseAgeBelowThreshold { .. } => {
+                Some("wait for the version to age, or pin to the prior release")
+            }
+            Self::ExoticSource { .. } => {
+                Some("prefer a registry version; vendor or fork if you must use this source")
+            }
+            Self::DisallowedLifecycleScript { .. } => Some(
+                "install with --ignore-scripts, or allow this script in `scripts.allow`",
+            ),
+            Self::LifecycleScriptIgnored { .. } => Some(
+                "audit the script before any future `npm rebuild` runs it",
+            ),
+            Self::PublishedAtUnknown => {
+                Some("re-run with cache disabled (`--no-cache`); registry metadata may be stale")
+            }
+            Self::PublisherChange { .. } => Some(
+                "verify the new publisher on the package's npm page before allowing",
+            ),
+            Self::DeprecatedVersion { .. } => {
+                Some("upgrade to a non-deprecated version, or pin to the last good one")
+            }
+            Self::SuspiciousScript { .. } => Some(
+                "treat as suspected supply-chain attack; do NOT install \u{2014} report to npm security",
+            ),
+            Self::VersionSurfaceChange { .. } => Some(
+                "diff the new bins/scripts against the prior version before allowing",
+            ),
+            Self::DistTagAnomaly { .. } => {
+                Some("pin to a specific version; do not rely on the `latest` tag for this package")
+            }
+            Self::NameSquat { .. } => Some(
+                "verify you meant this package, not the popular one it resembles",
+            ),
+            Self::MaintainerNewAccount { .. } => Some(
+                "wait for the account to age, or verify identity out-of-band before allowing",
+            ),
+            Self::ProvenanceMissing => Some(
+                "ask the maintainer to publish with `--provenance`, or relax `provenance.required`",
+            ),
+            Self::AdvisoryKnown { .. } => {
+                Some("upgrade past the affected range, or add the advisory id to `advisories.allow`")
+            }
+            Self::LicenseMissing { .. } => Some(
+                "ask the maintainer to declare a license, or add to `licenses.allow_missing`",
+            ),
+            Self::LicenseDisallowed { .. } => {
+                Some("add the license to `licenses.allow`, or replace the dependency")
+            }
+            Self::ProjectArchived { .. } => {
+                Some("plan a migration; archived projects no longer receive security fixes")
+            }
+            Self::ScorecardBelowThreshold { .. } => Some(
+                "lower `scorecard.min_score`, allowlist this package, or replace it",
+            ),
+            Self::TrustScoreBelowThreshold { .. } => Some(
+                "review the per-signal breakdown in the audit log; tune weights or allowlist",
+            ),
+            Self::SignalUnavailable { .. } => None,
+        }
+    }
 }
 
 /// Severity assigned to a `Reason` by the policy. `Allow` suppresses the
@@ -312,6 +382,143 @@ impl Decision {
             Self::Allow => "allow",
             Self::Warn { .. } => "warn",
             Self::Block { .. } => "block",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Exhaustive parity test for `Reason::remediation()`. The match
+    /// statement below has one arm per variant, so adding a new
+    /// `Reason` is a compile error here until its remediation hint is
+    /// considered. `SignalUnavailable` is the only variant deliberately
+    /// returning `None` (operational failure, not actionable per
+    /// dependency); every other variant must return a non-empty hint
+    /// short enough to fit one terminal line at typical widths.
+    #[test]
+    fn every_reason_variant_has_a_remediation_or_is_explicitly_none() {
+        let samples: Vec<Reason> = vec![
+            Reason::ReleaseAgeBelowThreshold {
+                observed_minutes: 1,
+                required_minutes: 1440,
+            },
+            Reason::ExoticSource {
+                kind: "git".into(),
+            },
+            Reason::DisallowedLifecycleScript {
+                script: "preinstall".into(),
+            },
+            Reason::LifecycleScriptIgnored {
+                script: "postinstall".into(),
+            },
+            Reason::PublishedAtUnknown,
+            Reason::PublisherChange {
+                previous_version: "1.0.0".into(),
+                previous: "alice".into(),
+                current: "mallory".into(),
+            },
+            Reason::DeprecatedVersion { message: None },
+            Reason::SuspiciousScript {
+                script: "postinstall".into(),
+                pattern: "curl-pipe-sh".into(),
+                excerpt: "curl x | sh".into(),
+            },
+            Reason::VersionSurfaceChange {
+                previous_version: "1.0.0".into(),
+                added_bins: vec![],
+                added_scripts: vec!["postinstall".into()],
+            },
+            Reason::DistTagAnomaly {
+                latest_version: "0.9.0".into(),
+                highest_published: "1.0.0".into(),
+            },
+            Reason::NameSquat {
+                style: "typo".into(),
+                target: "react".into(),
+            },
+            Reason::MaintainerNewAccount {
+                account: "x".into(),
+                age_days: 1,
+                threshold_days: 90,
+            },
+            Reason::ProvenanceMissing,
+            Reason::AdvisoryKnown {
+                id: "GHSA-x".into(),
+                severity: "critical".into(),
+                source: "ghsa".into(),
+            },
+            Reason::LicenseMissing {
+                source: "deps.dev".into(),
+            },
+            Reason::LicenseDisallowed {
+                licenses: vec!["GPL-3.0".into()],
+                source: "deps.dev".into(),
+            },
+            Reason::ProjectArchived {
+                source: "deps.dev".into(),
+            },
+            Reason::ScorecardBelowThreshold {
+                score: 3,
+                threshold: 6,
+                repo: "github.com/o/r".into(),
+                source: "openssf-scorecard".into(),
+            },
+            Reason::TrustScoreBelowThreshold {
+                score: 30,
+                threshold: 70,
+            },
+            Reason::SignalUnavailable {
+                provider: "osv".into(),
+                reason: "503".into(),
+            },
+        ];
+
+        for r in &samples {
+            // Forces the matrix to be exhaustive at compile time:
+            // adding a Reason variant without considering its
+            // remediation will fail to build here.
+            let must_have_hint = match r {
+                Reason::SignalUnavailable { .. } => false,
+                Reason::ReleaseAgeBelowThreshold { .. }
+                | Reason::ExoticSource { .. }
+                | Reason::DisallowedLifecycleScript { .. }
+                | Reason::LifecycleScriptIgnored { .. }
+                | Reason::PublishedAtUnknown
+                | Reason::PublisherChange { .. }
+                | Reason::DeprecatedVersion { .. }
+                | Reason::SuspiciousScript { .. }
+                | Reason::VersionSurfaceChange { .. }
+                | Reason::DistTagAnomaly { .. }
+                | Reason::NameSquat { .. }
+                | Reason::MaintainerNewAccount { .. }
+                | Reason::ProvenanceMissing
+                | Reason::AdvisoryKnown { .. }
+                | Reason::LicenseMissing { .. }
+                | Reason::LicenseDisallowed { .. }
+                | Reason::ProjectArchived { .. }
+                | Reason::ScorecardBelowThreshold { .. }
+                | Reason::TrustScoreBelowThreshold { .. } => true,
+            };
+            match (must_have_hint, r.remediation()) {
+                (true, Some(hint)) => {
+                    assert!(!hint.is_empty(), "{} hint is empty", r.code());
+                    assert!(
+                        hint.len() <= 100,
+                        "{} hint too long for one terminal line: {} chars",
+                        r.code(),
+                        hint.len()
+                    );
+                }
+                (true, None) => {
+                    panic!("{} must have a remediation hint", r.code())
+                }
+                (false, Some(_)) => {
+                    panic!("{} unexpectedly has a remediation hint", r.code())
+                }
+                (false, None) => {}
+            }
         }
     }
 }
