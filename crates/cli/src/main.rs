@@ -87,6 +87,20 @@ enum Command {
     /// reason variant is described the same way across all surfaces
     /// (PR comment, audit log, VEX `action_statement`).
     Report(ReportArgs),
+    /// Triage the current project's findings and print a suggested
+    /// `installguard.yaml` block that would resolve the actionable
+    /// false positives.
+    ///
+    /// Same evaluation pipeline as `scan`, but instead of a verdict
+    /// the output is a ready-to-paste policy snippet: lifecycle
+    /// scripts you can vet and allow, name-squat false positives to
+    /// suppress, and severity demotions for any block class with a
+    /// known operator-policy override (e.g. `dist-tag-anomaly`,
+    /// `signal-unavailable`).
+    ///
+    /// Always exits 0 — `doctor` is advisory; use `scan` or `ci` to
+    /// gate.
+    Doctor(DoctorArgs),
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -337,6 +351,12 @@ struct ReportArgs {
     out: Option<PathBuf>,
 }
 
+#[derive(Debug, clap::Args)]
+struct DoctorArgs {
+    #[command(flatten)]
+    common: EvalArgs,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ReportFormat {
     Markdown,
@@ -377,6 +397,7 @@ async fn main() -> ExitCode {
         }
         Command::Sign(args) => run_sign(args),
         Command::Report(args) => run_report(args),
+        Command::Doctor(args) => run_doctor(args).await,
     };
     match result {
         Ok(code) => code,
@@ -1719,9 +1740,296 @@ fn escape_table_cell(s: &str) -> String {
     s.replace('|', "\\|").replace('\n', " ")
 }
 
+// ── `doctor` subcommand ─────────────────────────────────────────────────────
+
+/// Triage findings into operator-actionable buckets and print a
+/// suggested `installguard.yaml` snippet that resolves the false
+/// positives we have a known fix for.
+async fn run_doctor(args: DoctorArgs) -> Result<ExitCode> {
+    let output = evaluate(&args.common).await?;
+    let suggestion = build_doctor_suggestion(&output.results);
+    print_doctor_report(&output, &suggestion);
+    // Doctor is advisory — never fail the shell. Use scan/ci to gate.
+    Ok(ExitCode::SUCCESS)
+}
+
+#[derive(Debug, Default)]
+struct DoctorSuggestion {
+    /// Packages with at least one `DisallowedLifecycleScript` reason.
+    /// (name, sorted unique list of scripts seen across all reasons).
+    lifecycle_scripts: Vec<(String, Vec<String>)>,
+    /// Packages flagged `NameSquat` — operator must verify these are
+    /// legitimate before adding to the allowlist.
+    name_squats: Vec<(String, String)>,
+    /// True iff at least one block was a `DistTagAnomaly`. The default
+    /// severity is already `warn` since 0.1.6, so this only triggers
+    /// when the operator promoted it.
+    dist_tag_block_seen: bool,
+    /// True iff at least one block was a `SignalUnavailable`. Same
+    /// shape as above — default is `warn` since 0.1.7.
+    signal_unavailable_block_seen: bool,
+    /// Total counts for the header, regardless of whether they were
+    /// actionable.
+    total_packages: usize,
+    total_blocks: usize,
+    total_warns: usize,
+}
+
+fn build_doctor_suggestion(results: &[DepResult]) -> DoctorSuggestion {
+    use std::collections::BTreeMap;
+
+    let mut s = DoctorSuggestion {
+        total_packages: results.len(),
+        ..DoctorSuggestion::default()
+    };
+
+    // Walk only blocked deps for actionable buckets; warns are counted
+    // for the header but not surfaced as fixes (they don't gate CI).
+    let mut scripts_by_pkg: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+    let mut squats: BTreeMap<String, String> = BTreeMap::new();
+
+    for r in results {
+        match &r.decision {
+            Decision::Block { reasons } => {
+                s.total_blocks += 1;
+                for reason in reasons {
+                    match reason {
+                        Reason::DisallowedLifecycleScript { script } => {
+                            scripts_by_pkg
+                                .entry(r.dep.name.clone())
+                                .or_default()
+                                .insert(script.clone());
+                        }
+                        Reason::NameSquat { target, .. } => {
+                            squats.insert(r.dep.name.clone(), target.clone());
+                        }
+                        Reason::DistTagAnomaly { .. } => s.dist_tag_block_seen = true,
+                        Reason::SignalUnavailable { .. } => {
+                            s.signal_unavailable_block_seen = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Decision::Warn { .. } => s.total_warns += 1,
+            Decision::Allow => {}
+        }
+    }
+
+    s.lifecycle_scripts = scripts_by_pkg
+        .into_iter()
+        .map(|(k, v)| (k, v.into_iter().collect()))
+        .collect();
+    s.name_squats = squats.into_iter().collect();
+    s
+}
+
+fn print_doctor_report(output: &EvalOutput, s: &DoctorSuggestion) {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+
+    let _ = writeln!(stdout, "InstallGuard doctor — {}", output.adapter_id);
+    let _ = writeln!(
+        stdout,
+        "  {} packages — {} block · {} warn",
+        s.total_packages, s.total_blocks, s.total_warns
+    );
+    let _ = writeln!(stdout);
+
+    let actionable = !s.lifecycle_scripts.is_empty()
+        || !s.name_squats.is_empty()
+        || s.dist_tag_block_seen
+        || s.signal_unavailable_block_seen;
+
+    if !actionable {
+        if s.total_blocks == 0 {
+            let _ = writeln!(stdout, "No blocks. Nothing to suggest.");
+        } else {
+            let _ = writeln!(
+                stdout,
+                "{} block(s) found, but none are in classes doctor knows how to suggest a config for.",
+                s.total_blocks
+            );
+            let _ = writeln!(
+                stdout,
+                "Run `installguard scan` for the full list and triage manually."
+            );
+        }
+        return;
+    }
+
+    // Commentary — explain *why* each suggestion is being made.
+    if !s.lifecycle_scripts.is_empty() {
+        let _ = writeln!(
+            stdout,
+            "Lifecycle scripts ({} package{}):",
+            s.lifecycle_scripts.len(),
+            if s.lifecycle_scripts.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
+        for (name, scripts) in &s.lifecycle_scripts {
+            let _ = writeln!(stdout, "  • {} ({})", name, scripts.join(", "));
+        }
+        let _ = writeln!(
+            stdout,
+            "  Review each package's install script before allowing — see"
+        );
+        let _ = writeln!(
+            stdout,
+            "  https://www.npmjs.com/package/<name> and the package's source."
+        );
+        let _ = writeln!(stdout);
+    }
+
+    if !s.name_squats.is_empty() {
+        let _ = writeln!(
+            stdout,
+            "Name-squat allowlist candidates ({}):",
+            s.name_squats.len()
+        );
+        for (name, target) in &s.name_squats {
+            let _ = writeln!(stdout, "  • {name} (resembles `{target}`)");
+        }
+        let _ = writeln!(
+            stdout,
+            "  Add ONLY if you've confirmed each package is the legitimate one"
+        );
+        let _ = writeln!(
+            stdout,
+            "  you intended (e.g. `gaxios` is Google's official HTTP client)."
+        );
+        let _ = writeln!(stdout);
+    }
+
+    if s.dist_tag_block_seen {
+        let _ = writeln!(stdout, "Severity: dist-tag-anomaly is currently blocking.");
+        let _ = writeln!(
+            stdout,
+            "  Default since 0.1.6 is `warn` — likely a local promotion."
+        );
+        let _ = writeln!(stdout);
+    }
+    if s.signal_unavailable_block_seen {
+        let _ = writeln!(
+            stdout,
+            "Severity: signal-unavailable is currently blocking."
+        );
+        let _ = writeln!(
+            stdout,
+            "  Default since 0.1.7 is `warn` — likely a local promotion."
+        );
+        let _ = writeln!(stdout);
+    }
+
+    // The paste-ready YAML.
+    let _ = writeln!(stdout, "Suggested installguard.yaml additions:");
+    let _ = writeln!(stdout, "─────────────────────────────────────────");
+    let _ = writeln!(stdout, "{}", render_doctor_yaml(s));
+}
+
+fn render_doctor_yaml(s: &DoctorSuggestion) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from("policyVersion: 1\n");
+
+    if !s.name_squats.is_empty() {
+        out.push_str("\ndefaults:\n  nameSquatAllow:\n");
+        for (name, target) in &s.name_squats {
+            // Quote names that aren't bare identifiers (scoped packages
+            // start with `@` which YAML treats as a reserved indicator).
+            let rendered = if name.starts_with('@') {
+                format!("\"{name}\"")
+            } else {
+                name.clone()
+            };
+            let _ = writeln!(
+                out,
+                "    - {rendered:<28} # resembles `{target}` — verify before allowing"
+            );
+        }
+    }
+
+    if !s.lifecycle_scripts.is_empty() {
+        out.push_str("\nscripts:\n  allow:\n");
+        for (name, scripts) in &s.lifecycle_scripts {
+            let rendered = if name.starts_with('@') {
+                format!("\"{name}\"")
+            } else {
+                name.clone()
+            };
+            let _ = writeln!(
+                out,
+                "    - {rendered:<28} # {} — review the script before allowing",
+                scripts.join(", ")
+            );
+        }
+    }
+
+    if s.dist_tag_block_seen || s.signal_unavailable_block_seen {
+        out.push_str("\nseverity:\n");
+        if s.dist_tag_block_seen {
+            out.push_str("  dist-tag-anomaly: warn   # default since 0.1.6\n");
+        }
+        if s.signal_unavailable_block_seen {
+            out.push_str("  signal-unavailable: warn # default since 0.1.7\n");
+        }
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn doctor_yaml_omits_empty_sections() {
+        let s = DoctorSuggestion {
+            total_packages: 100,
+            ..DoctorSuggestion::default()
+        };
+        let yaml = render_doctor_yaml(&s);
+        assert_eq!(yaml, "policyVersion: 1\n");
+    }
+
+    #[test]
+    fn doctor_yaml_quotes_scoped_package_names() {
+        let s = DoctorSuggestion {
+            lifecycle_scripts: vec![
+                ("@firebase/util".into(), vec!["postinstall".into()]),
+                ("core-js".into(), vec!["postinstall".into()]),
+            ],
+            ..DoctorSuggestion::default()
+        };
+        let yaml = render_doctor_yaml(&s);
+        assert!(
+            yaml.contains("- \"@firebase/util\""),
+            "scoped name not quoted: {yaml}"
+        );
+        assert!(
+            yaml.contains("- core-js"),
+            "bare name should not be quoted: {yaml}"
+        );
+    }
+
+    #[test]
+    fn doctor_yaml_emits_all_sections_when_present() {
+        let s = DoctorSuggestion {
+            lifecycle_scripts: vec![("core-js".into(), vec!["postinstall".into()])],
+            name_squats: vec![("gaxios".into(), "axios".into())],
+            dist_tag_block_seen: true,
+            signal_unavailable_block_seen: true,
+            ..DoctorSuggestion::default()
+        };
+        let yaml = render_doctor_yaml(&s);
+        assert!(yaml.contains("nameSquatAllow:"));
+        assert!(yaml.contains("scripts:"));
+        assert!(yaml.contains("severity:"));
+        assert!(yaml.contains("dist-tag-anomaly: warn"));
+        assert!(yaml.contains("signal-unavailable: warn"));
+    }
 
     #[test]
     fn workflow_property_escapes_specials() {

@@ -11,6 +11,25 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.12] — 2026-05-14
+
+New `installguard doctor` subcommand. Runs the same evaluation
+pipeline as `scan`, but instead of printing a verdict it groups
+the actionable findings by class and emits a ready-to-paste
+`installguard.yaml` block that resolves the false positives we
+have a known fix for: lifecycle-script blocks become a `scripts.
+allow` list (one entry per package, commented with the scripts
+seen so reviewers can vet before allowing), name-squat blocks
+become a `defaults.nameSquatAllow` list (commented with the
+package each one resembles, so operators verify they intended
+the package they have), and `dist-tag-anomaly` /
+`signal-unavailable` blocks become explicit `severity: warn`
+overrides (their default since 0.1.6 / 0.1.7 — surfacing this
+suggests the operator had locally promoted them and may want to
+revert). Doctor is advisory only — it always exits 0; use `scan`
+or `ci` to gate. Closes the "blocked → triage → write config"
+loop into a single command for first-time adopters.
+
 ## [0.1.11] — 2026-05-14
 
 Default `scripts.allow` gains `supabase`. The npm-distributed
