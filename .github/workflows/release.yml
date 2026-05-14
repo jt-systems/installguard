@@ -50,7 +50,7 @@ jobs:
             cross: false
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -147,7 +147,7 @@ jobs:
 
       - name: Check out tap repo
         if: steps.gate.outputs.skip != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: jt-systems/homebrew-installguard
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
