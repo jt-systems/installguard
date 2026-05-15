@@ -11,6 +11,46 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-05-15
+
+**PEP 740 publisher attestations are now surfaced as
+`provenance_claimed` on PyPI deps.** The pypi-registry provider
+gains a second probe — after fetching `/pypi/<name>/<version>/json`
+to derive `published_at` and yanked status, it also asks PyPI's
+[Integrity API](https://docs.pypi.org/api/integrity/)
+(`GET /integrity/<name>/<version>/<filename>/provenance`) about
+the canonical sdist (or first wheel as fallback) for the release.
+A `200` response means the file was uploaded with a Trusted
+Publisher attestation that PyPI cryptographically verified at
+upload time; we surface that as `Signal::ProvenanceClaimed` with
+`bundle_url` set to the integrity URL itself, ready for callers
+who want to re-fetch and verify.
+
+* Same signal shape as npm provenance (`Signal::ProvenanceClaimed
+  { bundle_url }`), so the `+10` trust-score boost applies
+  identically across ecosystems and `policy.requireProvenance`
+  now works for PyPI deps too.
+* Probe is silent on absence: a clean `404` (the common case
+  today — Trusted Publishers are still rolling out across the
+  index) emits no signal. Network errors on the probe are
+  swallowed so the metadata signals remain authoritative.
+* `pick_attestation_filename` is a pure helper, unit-tested
+  against `.tar.gz`, `.zip`-only sdists, and wheel-only
+  releases. Sdists are preferred because publishers attest every
+  artifact in a release with the same identity, so probing one
+  file is enough to detect provenance for the version.
+* Smoke-tested live: `sigstore@3.6.1` now surfaces
+  `provenance_claimed` against
+  `pypi.org/integrity/sigstore/3.6.1/sigstore-3.6.1.tar.gz/provenance`,
+  lifting its trust score to 98/100.
+
+This closes the `provenance_claimed` deferral on the PyPI side
+of the ecosystems coverage matrix. `publisher_change` and
+`maintainer_new_account` remain deferred — PyPI still does not
+expose a stable per-version publisher identity outside of the
+attestation envelope, and tracking *change* across versions
+needs that to be queryable cheaply.
+
 ## [0.2.3] — 2026-05-15
 
 **Poetry lockfiles are now first-class.** The PyPI adapter grows

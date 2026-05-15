@@ -1,7 +1,7 @@
 //! PyPI JSON API signal provider.
 //!
 //! Hits `GET https://pypi.org/pypi/<name>/<version>/json` for each
-//! resolved PyPI dependency and emits two signals:
+//! resolved PyPI dependency and emits two metadata signals:
 //!
 //! * [`Signal::PublishedAt`] — the upload time of the first
 //!   distribution file for that exact release. PyPI's per-file
@@ -16,22 +16,36 @@
 //!   discouraged version. The maintainer-supplied
 //!   `info.yanked_reason` becomes the deprecation message.
 //!
+//! Then, if the release exposes at least one distribution file,
+//! a second probe runs against PyPI's [Integrity API]
+//! (`GET /integrity/<project>/<version>/<filename>/provenance`)
+//! for the canonical sdist (preferred) or first wheel. A `200`
+//! response means the file has [PEP 740] attestations from a
+//! Trusted Publisher that PyPI cryptographically verified at
+//! upload time. We surface that with [`Signal::ProvenanceClaimed`]
+//! — the same shape npm provenance uses, since the trust
+//! semantics align: a structurally-verified attestation linking
+//! the published distribution to a known publisher identity.
+//! Anything other than `200` (typically `404` — most projects
+//! have not adopted Trusted Publishers yet) is silent: absence
+//! is not suspicious.
+//!
+//! [Integrity API]: https://docs.pypi.org/api/integrity/
+//! [PEP 740]: https://peps.python.org/pep-0740/
+//!
 //! ## Out of scope (deferred to follow-up slices)
 //!
-//! * Maintainer / publisher signals — PyPI's JSON API does not
-//!   expose per-version publisher identity, so
-//!   [`Signal::PublisherChange`] and
-//!   [`Signal::MaintainerNewAccount`] cannot be derived from this
-//!   endpoint alone.
+//! * Maintainer / publisher *change* signals — PyPI's JSON API
+//!   does not expose per-version publisher identity in a stable
+//!   form, and the Integrity API only carries the publisher when
+//!   attestations are present. [`Signal::PublisherChange`] and
+//!   [`Signal::MaintainerNewAccount`] cannot be derived
+//!   reliably yet.
 //! * `Signal::LifecycleScripts` / `Signal::SuspiciousScript` — Python
 //!   sdists execute `setup.py` at install time, but inspecting the
 //!   tarball requires a download + extract, which is a different
 //!   shape from the metadata-only providers shipping today. Tracked
 //!   separately as the "sdist scan" slice.
-//! * Scorecard wiring — the OpenSSF Scorecard provider needs a
-//!   repo URL, which lives in `info.project_urls`. Plumbing that
-//!   through requires changes to the Scorecard provider; deferred
-//!   so this slice stays focused.
 
 use std::time::Duration;
 
@@ -42,6 +56,7 @@ use installguard_core::signal::{Signal, SignalError, SignalProvider};
 use serde::Deserialize;
 
 const DEFAULT_BASE: &str = "https://pypi.org/pypi";
+const DEFAULT_INTEGRITY_BASE: &str = "https://pypi.org/integrity";
 const USER_AGENT: &str = concat!(
     "installguard-signal-pypi-registry/",
     env!("CARGO_PKG_VERSION")
@@ -51,14 +66,22 @@ const USER_AGENT: &str = concat!(
 pub struct PypiRegistryProvider {
     client: reqwest::Client,
     base: String,
+    integrity_base: String,
 }
 
 impl PypiRegistryProvider {
     pub fn new() -> Result<Self, reqwest::Error> {
-        Self::with_base(DEFAULT_BASE)
+        Self::with_bases(DEFAULT_BASE, DEFAULT_INTEGRITY_BASE)
     }
 
     pub fn with_base(base: impl Into<String>) -> Result<Self, reqwest::Error> {
+        Self::with_bases(base, DEFAULT_INTEGRITY_BASE)
+    }
+
+    pub fn with_bases(
+        base: impl Into<String>,
+        integrity_base: impl Into<String>,
+    ) -> Result<Self, reqwest::Error> {
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(30))
@@ -66,6 +89,7 @@ impl PypiRegistryProvider {
         Ok(Self {
             client,
             base: base.into().trim_end_matches('/').to_string(),
+            integrity_base: integrity_base.into().trim_end_matches('/').to_string(),
         })
     }
 }
@@ -108,8 +132,93 @@ impl SignalProvider for PypiRegistryProvider {
             .await
             .map_err(|e| SignalError::Decode(e.to_string()))?;
 
-        Ok(compute_signals(&body))
+        let mut out = compute_signals(&body);
+
+        // PEP 740 / PyPI Integrity API probe. Pick the canonical
+        // file for this release, ask the index whether it has
+        // attestations, and fold the result into the signal list.
+        // Network errors here are silent: the metadata signals
+        // are the contract for this provider; provenance is a
+        // best-effort augmentation.
+        if let Some(filename) = pick_attestation_filename(&body.urls) {
+            if let Ok(Some(provenance_url)) = self
+                .fetch_provenance_url(&dep.name, &dep.version, filename)
+                .await
+            {
+                out.push(Signal::ProvenanceClaimed {
+                    bundle_url: provenance_url,
+                });
+            }
+        }
+
+        Ok(out)
     }
+}
+
+impl PypiRegistryProvider {
+    /// Probe PyPI's Integrity API for this file. Returns `Ok(Some(url))`
+    /// when the index has provenance for the file (HTTP 200 against the
+    /// integrity endpoint), `Ok(None)` for a clean 404 (no
+    /// attestations — the common case today), and `Err` only on
+    /// network failure. Other status codes are treated as "no
+    /// attestation" because attestation absence is not suspicious.
+    async fn fetch_provenance_url(
+        &self,
+        name: &str,
+        version: &str,
+        filename: &str,
+    ) -> Result<Option<String>, SignalError> {
+        let url = format!(
+            "{}/{}/{}/{}/provenance",
+            self.integrity_base, name, version, filename
+        );
+        tracing::debug!(url, "probing pypi integrity api");
+        let resp = self
+            .client
+            .get(&url)
+            .header(
+                reqwest::header::ACCEPT,
+                "application/vnd.pypi.integrity.v1+json",
+            )
+            .send()
+            .await
+            .map_err(|e| SignalError::Network(e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::OK {
+            // We don't need to parse the body — a 200 means PyPI
+            // verified at least one attestation at upload time.
+            // The URL itself is what callers use to re-fetch and
+            // do their own deeper verification.
+            Ok(Some(url))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+/// Pick the file we should ask PyPI's Integrity API about.
+///
+/// Prefers the sdist (`.tar.gz` / `.zip`); falls back to the first
+/// wheel. Attestations are per-file on PyPI, but in practice the
+/// publisher signs every artifact in a release with the same
+/// trusted-publisher identity, so probing one file is enough to
+/// detect provenance for the release.
+#[must_use]
+pub fn pick_attestation_filename(files: &[PypiFile]) -> Option<&str> {
+    files
+        .iter()
+        .find(|f| {
+            let name = f.filename.as_str();
+            // sdists are .tar.gz or .zip; everything else (.whl,
+            // .egg) is per-platform. .tar.gz isn't a single
+            // filesystem extension so we keep that arm explicit.
+            name.ends_with(".tar.gz")
+                || std::path::Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
+        })
+        .or_else(|| files.first())
+        .map(|f| f.filename.as_str())
+        .filter(|s| !s.is_empty())
 }
 
 /// Pure helper: derives the signal set from a deserialised PyPI
@@ -163,26 +272,36 @@ pub struct PypiInfo {
 pub struct PypiFile {
     #[serde(default)]
     pub upload_time_iso_8601: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub filename: String,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn file_at(ts: &str) -> PypiFile {
+        PypiFile {
+            upload_time_iso_8601: Some(ts.parse().unwrap()),
+            filename: String::new(),
+        }
+    }
+
+    fn named_file(filename: &str) -> PypiFile {
+        PypiFile {
+            upload_time_iso_8601: Some("2024-06-01T12:00:00Z".parse().unwrap()),
+            filename: filename.to_string(),
+        }
+    }
+
     #[test]
     fn published_at_picks_earliest_upload_across_files() {
         let body = PypiResponse {
             info: PypiInfo::default(),
             urls: vec![
-                PypiFile {
-                    upload_time_iso_8601: Some("2024-06-01T12:00:00Z".parse().unwrap()),
-                },
-                PypiFile {
-                    upload_time_iso_8601: Some("2024-06-01T11:00:00Z".parse().unwrap()),
-                },
-                PypiFile {
-                    upload_time_iso_8601: Some("2024-06-01T13:00:00Z".parse().unwrap()),
-                },
+                file_at("2024-06-01T12:00:00Z"),
+                file_at("2024-06-01T11:00:00Z"),
+                file_at("2024-06-01T13:00:00Z"),
             ],
         };
         let sigs = compute_signals(&body);
@@ -211,9 +330,7 @@ mod tests {
                 yanked: true,
                 yanked_reason: Some("CVE-2024-XXXX".into()),
             },
-            urls: vec![PypiFile {
-                upload_time_iso_8601: Some("2024-06-01T12:00:00Z".parse().unwrap()),
-            }],
+            urls: vec![file_at("2024-06-01T12:00:00Z")],
         };
         let sigs = compute_signals(&body);
         let dep = sigs
@@ -235,9 +352,7 @@ mod tests {
                 yanked: true,
                 yanked_reason: Some(String::new()),
             },
-            urls: vec![PypiFile {
-                upload_time_iso_8601: Some("2024-06-01T12:00:00Z".parse().unwrap()),
-            }],
+            urls: vec![file_at("2024-06-01T12:00:00Z")],
         };
         let sigs = compute_signals(&body);
         match sigs
@@ -254,9 +369,7 @@ mod tests {
     fn non_yanked_release_does_not_emit_deprecated() {
         let body = PypiResponse {
             info: PypiInfo::default(),
-            urls: vec![PypiFile {
-                upload_time_iso_8601: Some("2024-06-01T12:00:00Z".parse().unwrap()),
-            }],
+            urls: vec![file_at("2024-06-01T12:00:00Z")],
         };
         let sigs = compute_signals(&body);
         assert!(!sigs
@@ -294,5 +407,52 @@ mod tests {
     fn id_is_stable() {
         let p = PypiRegistryProvider::new().expect("client");
         assert_eq!(p.id(), "pypi-registry");
+    }
+
+    // ── PEP 740 attestation lookup ────────────────────────────────────
+
+    #[test]
+    fn attestation_filename_prefers_sdist() {
+        let files = vec![
+            named_file("requests-2.31.0-py3-none-any.whl"),
+            named_file("requests-2.31.0.tar.gz"),
+            named_file("requests-2.31.0-cp39-cp39-macosx.whl"),
+        ];
+        assert_eq!(
+            pick_attestation_filename(&files),
+            Some("requests-2.31.0.tar.gz")
+        );
+    }
+
+    #[test]
+    fn attestation_filename_picks_zip_sdist_when_no_targz() {
+        let files = vec![
+            named_file("old-pkg-1.0-py3-none-any.whl"),
+            named_file("old-pkg-1.0.zip"),
+        ];
+        assert_eq!(pick_attestation_filename(&files), Some("old-pkg-1.0.zip"));
+    }
+
+    #[test]
+    fn attestation_filename_falls_back_to_first_wheel() {
+        let files = vec![
+            named_file("wheelonly-1.0-py3-none-any.whl"),
+            named_file("wheelonly-1.0-cp39-cp39-linux.whl"),
+        ];
+        assert_eq!(
+            pick_attestation_filename(&files),
+            Some("wheelonly-1.0-py3-none-any.whl")
+        );
+    }
+
+    #[test]
+    fn attestation_filename_returns_none_for_empty() {
+        assert_eq!(pick_attestation_filename(&[]), None);
+    }
+
+    #[test]
+    fn attestation_filename_skips_blank_filename() {
+        let files = vec![named_file("")];
+        assert_eq!(pick_attestation_filename(&files), None);
     }
 }
