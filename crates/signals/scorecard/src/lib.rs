@@ -33,6 +33,7 @@ use installguard_core::signal::{Signal, SignalError, SignalProvider};
 use serde::Deserialize;
 
 const NPM_BASE: &str = "https://registry.npmjs.org";
+const PYPI_BASE: &str = "https://pypi.org/pypi";
 const SCORECARD_BASE: &str = "https://api.securityscorecards.dev";
 const USER_AGENT: &str = concat!("installguard-signal-scorecard/", env!("CARGO_PKG_VERSION"));
 const SOURCE: &str = "openssf-scorecard";
@@ -41,17 +42,19 @@ const SOURCE: &str = "openssf-scorecard";
 pub struct ScorecardProvider {
     client: reqwest::Client,
     npm_base: String,
+    pypi_base: String,
     scorecard_base: String,
     cache: Mutex<HashMap<String, Option<u8>>>,
 }
 
 impl ScorecardProvider {
     pub fn new() -> Result<Self, reqwest::Error> {
-        Self::with_bases(NPM_BASE, SCORECARD_BASE)
+        Self::with_bases(NPM_BASE, PYPI_BASE, SCORECARD_BASE)
     }
 
     pub fn with_bases(
         npm_base: impl Into<String>,
+        pypi_base: impl Into<String>,
         scorecard_base: impl Into<String>,
     ) -> Result<Self, reqwest::Error> {
         let client = reqwest::Client::builder()
@@ -61,12 +64,13 @@ impl ScorecardProvider {
         Ok(Self {
             client,
             npm_base: npm_base.into().trim_end_matches('/').to_string(),
+            pypi_base: pypi_base.into().trim_end_matches('/').to_string(),
             scorecard_base: scorecard_base.into().trim_end_matches('/').to_string(),
             cache: Mutex::new(HashMap::new()),
         })
     }
 
-    async fn fetch_repo_url(&self, name: &str) -> Option<String> {
+    async fn fetch_npm_repo_url(&self, name: &str) -> Option<String> {
         let url = format!("{}/{}", self.npm_base, encode_npm_name(name));
         tracing::debug!(url, "fetching npm packument for repo discovery");
         let resp = self.client.get(&url).send().await.ok()?;
@@ -78,6 +82,20 @@ impl ScorecardProvider {
             RepoField::Url(u) => Some(u),
             RepoField::Object { url } => url,
         })
+    }
+
+    async fn fetch_pypi_repo_url(&self, name: &str, version: &str) -> Option<String> {
+        // PyPI is case- and separator-insensitive (PEP 503); the
+        // adapter normalises the name before any provider sees it,
+        // so the path is safe verbatim.
+        let url = format!("{}/{}/{}/json", self.pypi_base, name, version);
+        tracing::debug!(url, "fetching pypi metadata for repo discovery");
+        let resp = self.client.get(&url).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let body: PypiResponse = resp.json().await.ok()?;
+        pick_pypi_repo_url(&body.info)
     }
 
     async fn fetch_score(&self, repo: &str) -> Option<u8> {
@@ -113,12 +131,18 @@ impl SignalProvider for ScorecardProvider {
     fn supports(&self, dep: &ResolvedDependency) -> bool {
         matches!(
             dep.ecosystem,
-            Ecosystem::Npm | Ecosystem::Pnpm | Ecosystem::Yarn
+            Ecosystem::Npm | Ecosystem::Pnpm | Ecosystem::Yarn | Ecosystem::Pypi
         )
     }
 
     async fn signals(&self, dep: &ResolvedDependency) -> Result<Vec<Signal>, SignalError> {
-        let Some(repo_url) = self.fetch_repo_url(&dep.name).await else {
+        let repo_url = match dep.ecosystem {
+            Ecosystem::Npm | Ecosystem::Pnpm | Ecosystem::Yarn => {
+                self.fetch_npm_repo_url(&dep.name).await
+            }
+            Ecosystem::Pypi => self.fetch_pypi_repo_url(&dep.name, &dep.version).await,
+        };
+        let Some(repo_url) = repo_url else {
             return Ok(Vec::new());
         };
         let Some(triple) = extract_repo_triple(&repo_url) else {
@@ -239,6 +263,65 @@ struct ScorecardResponse {
     score: f32,
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub struct PypiInfo {
+    #[serde(default)]
+    pub home_page: Option<String>,
+    #[serde(default)]
+    pub project_urls: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PypiResponse {
+    #[serde(default)]
+    info: PypiInfo,
+}
+
+/// Picks the most-likely upstream source-repo URL out of a PyPI
+/// `info` block. Walks `project_urls` in a preference order
+/// (`Source`, `Repository`, `Source Code`, `Code`, then anything
+/// containing `github.com`) before falling back to `home_page`.
+/// Returns the raw URL; downstream [`extract_repo_triple`] is
+/// responsible for parsing it into a `host/owner/repo` triple
+/// (and rejecting non-github hosts).
+///
+/// Match is case-insensitive on the key and tolerates the
+/// inconsistent labelling PyPI maintainers use in the wild
+/// (`Source code`, `source-code`, `repo`, `Repository`, etc).
+#[must_use]
+pub fn pick_pypi_repo_url(info: &PypiInfo) -> Option<String> {
+    // Preference order over normalised keys.
+    const PREFERRED: &[&str] = &["source", "repository", "source code", "sourcecode", "code"];
+    let normalise = |k: &str| {
+        k.trim()
+            .to_ascii_lowercase()
+            .replace(['-', '_'], " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let urls: Vec<(String, &String)> = info
+        .project_urls
+        .iter()
+        .map(|(k, v)| (normalise(k), v))
+        .collect();
+    for needle in PREFERRED {
+        if let Some((_, v)) = urls.iter().find(|(k, _)| k == needle) {
+            return Some((*v).clone());
+        }
+    }
+    // Last resort over project_urls: any value that mentions
+    // github.com — many projects only set `Homepage` to their
+    // GitHub Pages site, but list the repo under a custom key.
+    if let Some((_, v)) = urls
+        .iter()
+        .find(|(_, v)| v.to_ascii_lowercase().contains("github.com"))
+    {
+        return Some((*v).clone());
+    }
+    info.home_page.clone().filter(|s| !s.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,5 +369,87 @@ mod tests {
     fn encode_npm_name_handles_scopes() {
         assert_eq!(encode_npm_name("@scope/name"), "@scope%2Fname");
         assert_eq!(encode_npm_name("plain"), "plain");
+    }
+
+    fn pypi_info_with(pairs: &[(&str, &str)], home: Option<&str>) -> PypiInfo {
+        PypiInfo {
+            home_page: home.map(str::to_string),
+            project_urls: pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn pypi_picks_source_over_homepage() {
+        let info = pypi_info_with(
+            &[
+                ("Homepage", "https://requests.readthedocs.io"),
+                ("Source", "https://github.com/psf/requests"),
+            ],
+            None,
+        );
+        assert_eq!(
+            pick_pypi_repo_url(&info).as_deref(),
+            Some("https://github.com/psf/requests")
+        );
+    }
+
+    #[test]
+    fn pypi_picks_repository_label_case_insensitive() {
+        let info = pypi_info_with(
+            &[("repository", "https://github.com/foo/bar")],
+            Some("https://example.com"),
+        );
+        assert_eq!(
+            pick_pypi_repo_url(&info).as_deref(),
+            Some("https://github.com/foo/bar")
+        );
+    }
+
+    #[test]
+    fn pypi_normalises_source_code_label() {
+        let info = pypi_info_with(&[("Source-Code", "https://github.com/foo/bar")], None);
+        assert_eq!(
+            pick_pypi_repo_url(&info).as_deref(),
+            Some("https://github.com/foo/bar")
+        );
+    }
+
+    #[test]
+    fn pypi_falls_back_to_any_github_url() {
+        let info = pypi_info_with(
+            &[
+                ("Documentation", "https://docs.example.com"),
+                ("Tracker", "https://github.com/foo/bar/issues"),
+            ],
+            None,
+        );
+        assert_eq!(
+            pick_pypi_repo_url(&info).as_deref(),
+            Some("https://github.com/foo/bar/issues")
+        );
+    }
+
+    #[test]
+    fn pypi_falls_back_to_home_page_last() {
+        let info = pypi_info_with(&[], Some("https://github.com/foo/bar"));
+        assert_eq!(
+            pick_pypi_repo_url(&info).as_deref(),
+            Some("https://github.com/foo/bar")
+        );
+    }
+
+    #[test]
+    fn pypi_returns_none_when_no_signal() {
+        let info = pypi_info_with(&[("Docs", "https://docs.example.com")], None);
+        assert_eq!(pick_pypi_repo_url(&info), None);
+    }
+
+    #[test]
+    fn pypi_empty_home_page_does_not_count() {
+        let info = pypi_info_with(&[], Some(""));
+        assert_eq!(pick_pypi_repo_url(&info), None);
     }
 }

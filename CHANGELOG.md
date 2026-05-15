@@ -11,6 +11,35 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-05-15
+
+**OpenSSF Scorecard now scores PyPI dependencies.** The Scorecard
+provider previously skipped Python deps because it discovered the
+upstream source-repo URL via the npm packument. This release
+teaches it to read PyPI's `info.project_urls` map (with
+`info.home_page` as a last-resort fallback) so any PyPI package
+that points its `Source` / `Repository` / `Source Code` URL at a
+GitHub repo gets a `scorecard_score` signal.
+
+* Scorecard provider: ecosystem-aware repo lookup. npm-family
+  deps still hit the npm packument; PyPI deps hit
+  `https://pypi.org/pypi/<name>/<version>/json` and walk
+  `project_urls` in preference order — `Source`, `Repository`,
+  `Source Code`, `Code` (case- and separator-insensitive),
+  then any value containing `github.com`, then `home_page`.
+* `supports()` extended to `Ecosystem::Pypi`.
+* New pure helper `pick_pypi_repo_url`, unit-tested against the
+  inconsistent labelling PyPI maintainers use in the wild
+  (`Source-Code`, `repository`, `Tracker → /issues`, etc).
+* GitHub-hosting requirement is unchanged: non-github source URLs
+  resolve to no signal (Scorecard's gitlab.com / bitbucket.org
+  coverage is too sparse to be useful today).
+* Smoke-tested live: `requests@2.31.0` now surfaces
+  `scorecard_score: 8` against `github.com/psf/requests`.
+
+Trust scoring on PyPI deps with linked GitHub repos now reflects
+their Scorecard posture the same way npm-family deps do.
+
 ## [0.2.1] — 2026-05-15
 
 **PyPI dependencies are now scored and gated.** The 0.2.0 adapter
