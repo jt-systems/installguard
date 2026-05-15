@@ -2,16 +2,26 @@
 #
 # Triggered by a version tag: v*.*.*
 #
-# Produces:
+# Produces, per release:
 #   - Static binaries for Linux (x86_64, aarch64), macOS (x86_64, aarch64), Windows (x86_64)
 #   - SHA-256 checksums file
-#   - SLSA Build Level 3 provenance via slsa-github-generator
+#   - One Sigstore (cosign keyless) bundle per binary and one for `checksums.txt`
+#   - One SLSA Build Level 3 provenance attestation covering all binaries
+#     plus `checksums.txt`, via the slsa-github-generator reusable workflow
 #
-# Signing and provenance notes:
-#   - Binary signing (via cosign) is left as a TODO stub until the keyless
-#     workflow is validated against a real release.
-#   - SLSA provenance is wired up via the reusable slsa-github-generator
-#     workflow; the upload step below feeds the artefact list to it.
+# Verification (consumer-side):
+#   cosign verify-blob \
+#     --certificate-identity-regexp '^https://github.com/jt-systems/installguard/\.github/workflows/release\.yml@refs/tags/v.*$' \
+#     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+#     --bundle installguard-aarch64-apple-darwin.cosign.bundle \
+#     installguard-aarch64-apple-darwin
+#
+# Pinning notes:
+#   The `--certificate-identity-regexp` above accepts any tag from this repo.
+#   For stricter pinning, replace `v.*` with the specific tag (e.g. `v0.3.0`).
+#   The OIDC issuer is the GitHub Actions token endpoint; it must be passed
+#   verbatim — without it, an attacker who can mint *any* Fulcio cert could
+#   forge a signature.
 
 name: Release
 
@@ -105,11 +115,16 @@ jobs:
           path: installguard-${{ matrix.target }}*
           if-no-files-found: error
 
-  # ── Checksum & publish ────────────────────────────────────────────────────────
+  # ── Checksum, sign, and publish ──────────────────────────────────────────────
   release:
     name: Publish release
     needs: build
     runs-on: ubuntu-latest
+
+    # `hashes` is consumed by the SLSA generator job below to build the
+    # provenance subjects list. Format: base64(`<sha256>  <filename>\n`...).
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
 
     steps:
       - name: Download all binaries
@@ -123,13 +138,82 @@ jobs:
         working-directory: binaries
         run: sha256sum installguard-* > checksums.txt
 
+      # Install cosign by SHA-pinned action tag. v3 covers `sign-blob`'s
+      # bundle output (no separate `--rekor-url`/`--fulcio-url` needed; the
+      # public-good Sigstore endpoints are the defaults).
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Keyless signing: cosign exchanges the ambient GitHub OIDC token for
+      # a 10-minute Fulcio code-signing certificate tied to this workflow's
+      # identity (`…/release.yml@refs/tags/<TAG>`), signs each artefact,
+      # submits the signature + cert to Rekor, and writes a Sigstore bundle
+      # (DSSE envelope + cert chain + Rekor inclusion proof) next to the
+      # artefact. Verifiers need only the bundle file plus the certificate
+      # identity / issuer above.
+      - name: Sign binaries and checksums with cosign (keyless)
+        working-directory: binaries
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          for f in installguard-* checksums.txt; do
+            # Skip anything we may have already signed in a previous step
+            # (defensive; the matrix produces no `.cosign.bundle` artefacts).
+            case "$f" in *.cosign.bundle) continue ;; esac
+            echo "::group::cosign sign-blob $f"
+            cosign sign-blob \
+              --bundle "${f}.cosign.bundle" \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              "$f"
+            echo "::endgroup::"
+          done
+
+      # Emit the base64-encoded subjects list the SLSA generator wants. We
+      # hash the binaries and `checksums.txt`; the cosign bundles are
+      # excluded from SLSA subjects (they are themselves attestations of
+      # the binaries, not artefacts under attestation).
+      - name: Emit SLSA subjects
+        id: hash
+        working-directory: binaries
+        run: |
+          set -euo pipefail
+          subjects=$(sha256sum installguard-* checksums.txt | base64 -w0)
+          echo "hashes=${subjects}" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             binaries/installguard-*
             binaries/checksums.txt
+            binaries/*.cosign.bundle
+            binaries/*.sig
+            binaries/*.pem
           generate_release_notes: true
+
+  # ── SLSA Build Level 3 provenance ────────────────────────────────────────────
+  # Reusable workflow runs on a hardened GitHub-hosted builder, generates a
+  # SLSA v1.0 provenance attestation over the subjects emitted above, signs
+  # it via the same Fulcio/Rekor path as the binary signatures, and uploads
+  # the resulting `*.intoto.jsonl` to the existing release.
+  #
+  # `permissions` is scoped here, not at workflow level: the reusable
+  # workflow refuses to run with broader permissions than it needs.
+  provenance:
+    name: SLSA L3 provenance
+    needs: release
+    permissions:
+      actions: read       # read this workflow's run metadata
+      id-token: write     # mint the OIDC token for Fulcio
+      contents: write     # upload the .intoto.jsonl to the release
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.0.0
+    with:
+      base64-subjects: ${{ needs.release.outputs.hashes }}
+      provenance-name: installguard-${{ github.ref_name }}.intoto.jsonl
+      upload-assets: true
+      upload-tag-name: ${{ github.ref_name }}
 
   # ── Homebrew tap bump ────────────────────────────────────────────────────────
   # Opens a PR against jt-systems/homebrew-installguard bumping the formula's
@@ -237,14 +321,3 @@ jobs:
             --body "Auto-generated by jt-systems/installguard release workflow for tag ${{ github.ref_name }}." \
             --base main
 
-  # ── SLSA provenance (Build Level 3) ──────────────────────────────────────────
-  # TODO: wire up once first real release is ready.
-  # provenance:
-  #   needs: release
-  #   uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2
-  #   permissions:
-  #     actions: read
-  #     id-token: write
-  #     contents: write
-  #   with:
-  #     base64-subjects: "<output from release job>"

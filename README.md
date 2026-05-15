@@ -72,12 +72,13 @@ Comparison table in [whitepaper §17](whitepaper.md#17-comparison-with-existing-
 
 ## Quick start
 
-> **Alpha — `0.2.x`.** Pre-built binaries are published per
-> tagged release (SHA-256 checksums in `checksums.txt`); Cosign
-> binary signing is on the v0.3 roadmap. Network providers
-> (registry metadata, OSV, deps.dev, Scorecard, PyPI Integrity API)
-> are on by default and individually opt-out; `--frozen` runs
-> entirely from `installguard.lock` with zero sockets.
+> **Alpha — `0.3.x`.** Pre-built binaries are published per
+> tagged release, signed by [Sigstore cosign keyless](https://docs.sigstore.dev/cosign/signing/overview/)
+> and shipped with [SLSA v1.0 Build Level 3 provenance](https://slsa.dev/spec/v1.0/levels#build-l3).
+> Network providers (registry metadata, OSV, deps.dev, Scorecard,
+> PyPI Integrity API) are on by default and individually opt-out;
+> `--frozen` runs entirely from `installguard.lock` with zero
+> sockets.
 
 ```bash
 # Homebrew (macOS, Linux)

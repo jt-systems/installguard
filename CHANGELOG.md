@@ -11,6 +11,60 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-15
+
+**Release-binary signing and SLSA Build Level 3 provenance.** The
+release workflow now Cosign-signs every published binary plus
+`checksums.txt`, and emits a SLSA v1.0 Build Level 3 provenance
+attestation covering the same artefacts. This closes the
+"known-pending" item from 0.2.9 and the long-standing
+`v0.3 roadmap` Sigstore signing milestone.
+
+* **Cosign keyless signing.** The release job runs
+  [`cosign sign-blob`](https://docs.sigstore.dev/cosign/signing/signing_with_blobs/)
+  against every binary in the matrix and against
+  `checksums.txt`, producing a `*.cosign.bundle` Sigstore bundle
+  (DSSE envelope + Fulcio cert chain + Rekor inclusion proof) for
+  each. Signing is *keyless*: cosign exchanges the ambient GitHub
+  OIDC token for a 10-minute Fulcio code-signing certificate
+  whose SAN is bound to this workflow file at the published tag,
+  signs, submits to Rekor, and writes the bundle. There are no
+  long-lived signing keys for an attacker to steal.
+
+  Verifiers paste the published `cosign verify-blob` command into
+  their shell after downloading the binary plus its
+  `.cosign.bundle` sidecar — the install page documents the full
+  command including the mandatory `--certificate-identity-regexp`
+  and `--certificate-oidc-issuer` flags. The identity regex
+  accepts any tag from this repo by default; consumers wanting
+  stricter pinning swap `v.*` for the exact tag.
+
+* **SLSA v1.0 Build Level 3 provenance.** A new `provenance` job
+  invokes the
+  [`slsa-github-generator`](https://github.com/slsa-framework/slsa-github-generator)
+  reusable workflow on a hardened GitHub-hosted builder. The
+  generator emits a SLSA v1.0 provenance attestation
+  (`installguard-<TAG>.intoto.jsonl`) covering every binary plus
+  `checksums.txt`, signed via the same Fulcio/Rekor path, and
+  uploads it to the same release. Consumers verify with
+  [`slsa-verifier`](https://github.com/slsa-framework/slsa-verifier)
+  pinned to the source repo + tag — the install page documents
+  the command.
+
+* **What this *does not* change:** the `requireProvenance`
+  policy gate still validates *npm and PyPI* publisher
+  attestations structurally (in-toto subject digest match against
+  the tarball's `dist.integrity`, or a 200 from PyPI's Integrity
+  API); cryptographic verification of those bundles against a
+  pinned Sigstore Fulcio root is a separate piece of work
+  tracked under ROADMAP M9. See the 0.2.6 entry for the current
+  honest scope of `requireProvenance`.
+
+  The `cosign verify-blob` command above verifies *InstallGuard's
+  own release artefacts* — i.e. the binary you downloaded was
+  built by this repo's release workflow at the published tag —
+  not the dependencies it scans.
+
 ## [0.2.9] — 2026-05-15
 
 **Honesty pass on the README and the public docs site.** No

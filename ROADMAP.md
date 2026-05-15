@@ -10,7 +10,7 @@ Status legend: ☐ planned · ◐ in progress · ☑ shipped
 
 The smallest useful tool: read a lockfile, evaluate freshness, print a verdict.
 
-- ◐ Rust workspace skeleton, CI, release pipeline with SLSA provenance _(skeleton + CI + release workflow shipped; SLSA generator step prepared but commented out pending first tagged release)_
+- ☑ Rust workspace skeleton, CI, release pipeline with SLSA provenance _(skeleton + CI shipped; release workflow signs every binary and `checksums.txt` via cosign keyless and emits SLSA v1.0 Build Level 3 provenance — 0.3.0)_
 - ☑ `pnpm-lock.yaml` adapter (most policy-aligned ecosystem first)
 - ☑ `package-lock.json` adapter
 - ☑ npm registry signal provider (publish time, scripts, integrity, maintainers)
@@ -49,7 +49,7 @@ Make decisions reproducible and provable.
 - ☑ `installguard.lock` writer/reader with stable, deterministic JSON
 - ☑ `--frozen-policy` mode (re-verify offline against a recorded snapshot)
 - ☑ in-toto v1 attestation predicate `policy-evaluation/v1`
-- ☐ Sigstore signing (cosign keyless and KMS)
+- ◐ Sigstore signing (cosign keyless and KMS) _(release-binary keyless signing shipped 0.3.0; KMS path and downstream Sigstore-Fulcio verification of npm/PyPI provenance bundles still deferred)_
 - ◐ `installguard verify` against a signed attestation _(unsigned-lock verify shipped; signed-attestation path depends on Sigstore wiring)_
 - ☑ CycloneDX SBOM export with policy-decision properties
 - ☑ VEX statement export per package decision
