@@ -11,6 +11,22 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.18] — 2026-05-15
+
+Documentation & examples release. No binary changes; same gate, more
+places to plug it in.
+
+* New recipe **Dependency bots (Dependabot & Renovate)** at
+  <https://installguard.dev/recipes/dependency-bots/>: how to scope
+  an InstallGuard workflow to bot-authored bump PRs, gate Dependabot
+  automerge on a clean verdict, and configure Renovate to defer
+  automerge to required status checks.
+* New drop-in workflow `examples/workflows/installguard-bot-prs.yml`
+  with a scoped scan job + an optional automerge job for clean
+  patch/minor Dependabot bumps. Includes the security rationale for
+  keeping the gate in a target-branch workflow file so bots can't
+  silently weaken it via a PR-branch edit.
+
 ## [0.1.17] — 2026-05-15
 
 Cache invalidation, finally automatic. The on-disk signal cache

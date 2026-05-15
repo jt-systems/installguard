@@ -1,0 +1,107 @@
+# Example: drop this file at `.github/workflows/installguard-bot-prs.yml`
+# in any JS/TS repo to gate Dependabot/Renovate dependency-bump PRs through
+# InstallGuard before they're allowed to merge.
+#
+# Why a separate workflow?
+#
+#   * Dependabot PRs run with the read-only `GITHUB_TOKEN` permissions of
+#     the *target* branch's workflow file, not the PR author's. Putting the
+#     gate in `main` guarantees bots can't bypass it.
+#   * Lets you scope path filters tightly to manifest/lockfile changes, so
+#     human PRs that only touch source code aren't double-scanned.
+#   * Makes it trivial to add an automerge step gated on InstallGuard's
+#     verdict (see the optional second job below).
+#
+# Pairs with `installguard.yml` (the broad PR scan). This workflow is the
+# stricter "bot diff" gate.
+
+name: InstallGuard (bot PRs)
+
+on:
+  pull_request:
+    paths:
+      - "**/package.json"
+      - "**/package-lock.json"
+      - "**/pnpm-lock.yaml"
+      - "**/yarn.lock"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  scan:
+    # Only run on PRs from the dependency bots. Comment this out to gate
+    # *every* manifest/lockfile change, bot or human.
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' ||
+      github.event.pull_request.user.login == 'renovate[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install InstallGuard
+        run: |
+          curl -L https://github.com/jt-systems/installguard/releases/latest/download/installguard-x86_64-unknown-linux-musl \
+            -o /usr/local/bin/installguard
+          chmod +x /usr/local/bin/installguard
+
+      - name: Cache signals
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/installguard
+          key: installguard-${{ runner.os }}-${{ hashFiles('**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock') }}
+          restore-keys: |
+            installguard-${{ runner.os }}-
+
+      - name: Scan
+        id: scan
+        run: |
+          set +e
+          installguard ci --summary-file summary.json
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Render comment
+        run: |
+          installguard report \
+            --from summary.json \
+            --commit "${{ github.event.pull_request.head.sha }}" \
+            --exit-code "${{ steps.scan.outputs.exit_code }}" \
+            > comment.md
+
+      - name: Post comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: installguard-bot-prs
+          path: comment.md
+
+      - name: Fail on block
+        if: steps.scan.outputs.exit_code != '0'
+        run: exit 1
+
+  # ── Optional: auto-approve & enable automerge for clean Dependabot PRs ──────
+  #
+  # Only fires when the `scan` job succeeded (i.e. InstallGuard returned 0).
+  # Restricts automerge to patch + minor updates; major upgrades still need a
+  # human. Tweak the `update-type` filter to taste.
+  automerge:
+    needs: scan
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Fetch metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+
+      - name: Enable automerge for patch & minor
+        if: >-
+          steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+          steps.meta.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
