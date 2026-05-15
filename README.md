@@ -72,7 +72,12 @@ Comparison table in [whitepaper §17](whitepaper.md#17-comparison-with-existing-
 
 ## Quick start
 
-> **Alpha — `0.1.0`.** Pre-built binaries land with the first tagged release; until then both install paths build from source.
+> **Alpha — `0.2.x`.** Pre-built binaries are published per
+> tagged release (SHA-256 checksums in `checksums.txt`); Cosign
+> binary signing is on the v0.3 roadmap. Network providers
+> (registry metadata, OSV, deps.dev, Scorecard, PyPI Integrity API)
+> are on by default and individually opt-out; `--frozen` runs
+> entirely from `installguard.lock` with zero sockets.
 
 ```bash
 # Homebrew (macOS, Linux)

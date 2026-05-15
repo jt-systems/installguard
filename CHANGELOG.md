@@ -11,6 +11,47 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.2.9] — 2026-05-15
+
+**Honesty pass on the README and the public docs site.** No
+behaviour change; this release closes three documentation
+overclaims that an external review surfaced.
+
+* **README's quick-start no longer says "alpha 0.1.0" or implies
+  binaries don't exist yet.** Updated to reflect the current
+  `0.2.x` series, the SHA-256 checksums file we publish per
+  release, and the v0.3 roadmap item for Cosign-signed binaries.
+  Network-provider defaults (registry metadata, OSV, deps.dev,
+  Scorecard, PyPI Integrity API are on by default; each has a
+  `--no-…` flag; `--frozen` runs entirely from the lockfile) are
+  spelled out so users can size the network blast radius before
+  they invoke us.
+
+* **Site landing page no longer claims InstallGuard "never opens
+  an outbound socket".** The card describing zero side-effects
+  was correct on `--frozen` and incorrect everywhere else
+  (registry metadata, advisory lookups, project metadata, and
+  Scorecard pulls all open sockets in the default scan path).
+  Replaced with the truthful description plus an explicit
+  pointer to the `--frozen` mode for true zero-network runs. The
+  full lockfile coverage list (`uv.lock`, `poetry.lock`, pinned
+  `requirements.txt`) was added at the same time so the card
+  doesn't accidentally undercount our PyPI support.
+
+* **Site install page no longer says "signed binaries".**
+  Releases ship SHA-256 checksums and SLSA L3 attestations are
+  produced for the SBOM and policy-evaluation predicates today,
+  but the binaries themselves are not yet Cosign-signed and the
+  `checksums.txt` file is not yet attested. The page now
+  documents the present state plus the v0.3 roadmap item.
+  `start/what.md` carries the same correction.
+
+**Known pending (tracked, not blocking this release):** the
+release workflow itself does not yet Cosign-sign the published
+binaries or attest the checksums file. That work is captured in
+the ROADMAP under the v0.3 milestone alongside Sigstore Fulcio
+verification of npm/PyPI provenance bundles.
+
 ## [0.2.8] — 2026-05-15
 
 **Yarn workspace member `package.json` files are now walked for
