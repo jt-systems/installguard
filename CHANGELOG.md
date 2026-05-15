@@ -11,6 +11,30 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.14] — 2026-05-15
+
+New `installguard simulate <candidate.yaml>` subcommand. Runs the
+same evaluation pipeline as `scan` once against the project's
+current policy, then re-evaluates every dependency against the
+candidate policy using the *same* signals (no second network
+round-trip), and prints the per-package decision diff: which
+packages would be newly blocked, newly warned, newly allowed, or
+have their reasons change while staying in the same decision
+class. Pretty output groups by class with a `+`/`-` reason-code
+delta per package; `--format json` emits a stable
+machine-readable shape (`schemaVersion: 1`) with per-change
+before/after `details` and `reasonCodes`. Always exits 0 —
+simulate is advisory; gating belongs in `scan` or `ci`.
+Completes the `explain` (why was this blocked?) /
+`doctor` (what should I add to my policy?) /
+`simulate` (what would happen if I added this?) triad — the
+"propose → preview → merge" loop for policy changes without
+requiring a separate scratch repo or a network re-fetch.
+
+`--frozen` is rejected for `simulate` with a clear error: the
+lock stores decisions, not raw signals, so a candidate policy
+cannot be re-evaluated against it.
+
 ## [0.1.13] — 2026-05-15
 
 New `installguard explain <name>@<version>` subcommand. Runs the
