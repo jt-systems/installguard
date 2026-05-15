@@ -82,9 +82,9 @@ Move beyond age into the multi-signal model from the whitepaper §7.
 
 Plug into the wider ecosystem.
 
-- ☐ OSV / GHSA provider (consume, do not produce, advisory data)
-- ☐ deps.dev provider
-- ☐ OpenSSF Scorecard provider
+- ☑ OSV / GHSA provider (consume, do not produce, advisory data)
+- ☑ deps.dev provider
+- ☑ OpenSSF Scorecard provider
 - ☐ Optional Socket / Snyk Advisor providers (gated by API key)
 - ☐ Public plugin trait for third-party signal providers
 - ☐ Plugin discovery and signature verification
@@ -165,7 +165,7 @@ Polish that drives adoption.
 - ☐ JetBrains plugin
 - ☑ `installguard doctor` — triage findings and emit a paste-ready `installguard.yaml` block
 - ☑ Editor JSON-Schema integration docs (VS Code, Zed, JetBrains, Neovim)
-- ☐ `installguard explain <package>@<version>` — full signal report and policy trace
+- ☑ `installguard explain <package>@<version>` — full signal report and policy trace
 - ☐ `installguard simulate --policy new.yaml` — preview a policy change against current repo
 - ☐ Renovate / Dependabot integration: emit policy-aware update preferences (`installguard.policy.json`) so bots skip updates that would violate policy
 - ☐ Web-based decision viewer (static HTML report)
