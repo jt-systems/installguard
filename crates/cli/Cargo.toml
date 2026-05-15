@@ -24,6 +24,7 @@ installguard-core = { workspace = true }
 installguard-adapter-npm = { workspace = true }
 installguard-adapter-pnpm = { workspace = true }
 installguard-adapter-yarn = { workspace = true }
+installguard-adapter-pypi = { workspace = true }
 installguard-signal-npm-registry = { workspace = true }
 installguard-signal-osv = { workspace = true }
 installguard-signal-depsdev = { workspace = true }

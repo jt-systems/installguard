@@ -11,6 +11,45 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-15
+
+**First non-npm ecosystem.** PyPI lockfiles now parse, evaluate, and
+report alongside npm / pnpm / yarn projects. The signal providers
+will follow in 0.2.x; this release ships the adapter so users can
+immediately see PyPI dependencies in `scan` / `ci` / `lock` /
+`sbom` / `vex` output, and so policy authors can start writing
+forward-compatible `pypi:`-prefixed allowlists today.
+
+* New crate `installguard-adapter-pypi` recognising two formats:
+  * **`uv.lock`** — TOML schema version 1, the canonical lockfile
+    for [uv](https://docs.astral.sh/uv/). Pulls per-package
+    sdist/wheel URLs and `sha256` hashes; root virtual package is
+    suppressed; transitive vs direct is computed from the root's
+    `dependencies` list.
+  * **`requirements.txt`** — only when generated with hashes
+    (`uv pip compile --generate-hashes` or
+    `pip-compile --generate-hashes`). Hash-less files are rejected
+    with a clear actionable error: a wishlist is not a lockfile,
+    and shipping a lockfile-shaped adapter against one would
+    silently lower the bar.
+* PEP 503 name normalisation throughout (`Re_quests` →
+  `requests`); ecosystem matchers and cache keys all see the
+  normalised form.
+* `pip-compile`'s `# via -r requirements.in` annotation classifies
+  direct deps; everything else is transitive.
+* `locate_lockfile` priority order is now `pnpm-lock.yaml` →
+  `yarn.lock` → `package-lock.json` → `uv.lock` →
+  `requirements.txt`. npm-family lockfiles still win when both are
+  present (a polyglot repo running InstallGuard from the JS root
+  keeps its existing behaviour).
+* PyPI deps with no signal provider currently resolve to `allow`
+  with empty signals — visible in `scan` output and `sbom`
+  components, but not gated until 0.2.x ships the PyPI providers.
+
+This is the first release on the `0.2.x` line. Existing 0.1.x
+policies, locks, and audit logs are forward-compatible without
+changes.
+
 ## [0.1.19] — 2026-05-15
 
 Documentation catch-up release. No binary changes.

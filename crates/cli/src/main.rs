@@ -15,6 +15,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use futures::stream::{FuturesUnordered, StreamExt};
 use installguard_adapter_npm::NpmAdapter;
 use installguard_adapter_pnpm::PnpmAdapter;
+use installguard_adapter_pypi::PypiAdapter;
 use installguard_adapter_yarn::YarnAdapter;
 use installguard_cache::{CachedProvider, SignalCache, Ttl};
 use installguard_core::adapter::LockfileAdapter;
@@ -548,6 +549,7 @@ async fn evaluate(args: &EvalArgs) -> Result<EvalOutput> {
         Box::new(PnpmAdapter::new()),
         Box::new(YarnAdapter::new()),
         Box::new(NpmAdapter::new()),
+        Box::new(PypiAdapter::new()),
     ];
     let (adapter, lockfile) = locate_lockfile(&args.path, &adapters)?;
     tracing::info!(adapter = adapter.id(), path = %lockfile.display(), "using lockfile");
@@ -786,8 +788,17 @@ fn locate_lockfile<'a>(
 ) -> Result<(&'a dyn LockfileAdapter, PathBuf)> {
     // Conventional filenames in priority order. The first existing match
     // wins; pnpm-lock.yaml is checked before package-lock.json because pnpm
-    // projects sometimes also ship a stale npm lockfile.
-    let candidates = ["pnpm-lock.yaml", "yarn.lock", "package-lock.json"];
+    // projects sometimes also ship a stale npm lockfile. uv.lock is
+    // preferred over requirements.txt because uv.lock is a true lockfile
+    // shape; requirements.txt only qualifies when generated with hashes
+    // and is the legacy fallback.
+    let candidates = [
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "package-lock.json",
+        "uv.lock",
+        "requirements.txt",
+    ];
     for name in candidates {
         let path = root.join(name);
         if !path.exists() {
