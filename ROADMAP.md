@@ -151,7 +151,6 @@ Apply the model to other ecosystems.
 - ☑ poetry.lock adapter — 0.2.3
 - ☑ PEP 740 publisher attestations (`provenance_claimed` on PyPI) — 0.2.4
 - ☑ sdist `setup.py` static analysis — 0.2.5
-- ☐ `poetry.lock` adapter
 - ☐ crates.io adapter
 - ☐ Go modules adapter (`go.sum`)
 - ☐ RubyGems adapter (`Gemfile.lock`)

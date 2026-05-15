@@ -510,7 +510,7 @@ A security tool must not become a supply-chain risk. InstallGuard's distribution
 - **Signed releases** with SLSA Build Level 3 provenance attestations.
 - **Distribution** via Homebrew, apt, scoop, container images, and GitHub Releases — each verifiable against the same provenance.
 - **Pinned, vendored dependencies** for the build itself.
-- **Offline-capable by design** — the CLI never phones home.
+- **Offline-capable by design** — there is no telemetry or hidden phone-home path; optional signal providers can be disabled, and `--frozen` runs with zero sockets.
 
 ---
 
@@ -548,7 +548,7 @@ The objective is not to replace package-manager protections — it is to **opera
 
 ## 16. Ecosystem Reach Beyond npm
 
-While this paper focuses on JavaScript, the freshness-governance principles apply to every package ecosystem. InstallGuard's core is designed to be language-agnostic, with adapters for:
+While the original motivation was JavaScript, the freshness-governance principles apply to every package ecosystem. InstallGuard's core is designed to be language-agnostic. PyPI support ships today, with additional adapters planned for:
 
 - **PyPI** (already targeted by ctx, phpass-style attacks)
 - **RubyGems**
@@ -575,12 +575,14 @@ InstallGuard is **complementary** to, not a replacement for, the tools below.
 | Exotic-source blocking              |      ✓       |   ◐    |  ✗   |     ✗     |       ◐        |
 | Org-wide policy & audit             |      ✓       |   ✓    |  ✓   |     ✗     |       ✗        |
 | Build attestation of policy         |      ✓       |   ✗    |  ✗   |     ✗     |       ✗        |
-| Registry-proxy enforcement          |      ✓       |   ✗    |  ✗   |     ✗     |       ✗        |
+| Registry-proxy enforcement (roadmap M6) |   ◐    |   ✗    |  ✗   |     ✗     |       ✗        |
 | Open source                         |      ✓       |   ◐    |  ✗   |     ✓     |       ✓        |
 
 `*` InstallGuard *consumes* OSV/GHSA as a signal but does not maintain its own CVE database.
 
 Legend: ✓ supported, ◐ partial, ✗ not supported.
+
+For InstallGuard, `◐` on registry-proxy enforcement means the reusable policy engine is shipped today, while the proxy plugins themselves remain on the roadmap.
 
 ---
 

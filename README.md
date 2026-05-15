@@ -36,7 +36,7 @@ Status legend: ☑ shipped · ◐ partial · ☐ planned
 
 | Capability | Status |
 | ---------- | :----: |
-| Lockfile adapters: `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock` (Berry) | ☑ |
+| Lockfile adapters: `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`, `poetry.lock`, hashed `requirements.txt` | ☑ |
 | Minimum release-age enforcement (per environment, with direct-dep overrides) | ☑ |
 | Lifecycle script approval lists (`preinstall` / `install` / `postinstall`) | ☑ |
 | Exotic-source blocking (Git, tarball, GitHub shortcut) | ☑ |
@@ -48,11 +48,12 @@ Status legend: ☑ shipped · ◐ partial · ☐ planned
 | Deterministic `installguard.lock` + in-toto attestation (`policy-evaluation/v1`) | ☑ |
 | CycloneDX SBOM export with policy-decision properties + per-package VEX | ☑ |
 | `--frozen` offline re-verification against a recorded snapshot | ☑ |
+| PyPI install-time scanning (`setup.py` in canonical `.tar.gz` sdists) | ◐ |
 | Maintainer 2FA status check | ◐ deferred (registry doesn't expose it unauthenticated) |
 | Sigstore signing (cosign keyless / KMS) for attestations | ◐ structural provenance match shipped; full Fulcio/Rekor verification deferred |
 | Sandboxed install-script execution | ☐ planned (M5) |
 | Registry-proxy enforcement (Verdaccio / Artifactory / Nexus) | ☐ planned (M6) |
-| Multi-ecosystem support (PyPI, crates.io, Go, RubyGems, …) | ☐ planned (M7) |
+| Additional ecosystems beyond PyPI (crates.io, Go, RubyGems, …) | ☐ planned (M8+) |
 
 See the [roadmap](ROADMAP.md) for milestones and the [design document](DESIGN.md) for the technical scope.
 
@@ -64,7 +65,7 @@ InstallGuard is **complementary**, not a replacement, for:
 
 - `npm audit`, Snyk, osv-scanner — keep them; they catch *known* vulnerabilities.
 - Dependabot / Renovate — keep them; InstallGuard makes their PRs safer to merge.
-- pnpm built-ins (`minimumReleaseAge`, `onlyBuiltDependencies`) — InstallGuard *operationalises* these across an organisation: central policy, audit, attestation, registry-proxy enforcement.
+- pnpm built-ins (`minimumReleaseAge`, `onlyBuiltDependencies`) — InstallGuard *operationalises* these across an organisation: central policy, audit, attestation, and cross-ecosystem evidence.
 
 Comparison table in [whitepaper §17](whitepaper.md#17-comparison-with-existing-tools).
 
@@ -87,7 +88,7 @@ brew install jt-systems/installguard/installguard
 # Or build from source (Rust 1.86+):
 cargo install --path crates/cli
 
-# Scan the current project (uses package-lock.json / pnpm-lock.yaml / yarn.lock)
+# Scan the current project (auto-detects npm / pnpm / yarn / uv / poetry / hashed requirements)
 installguard scan
 
 # Triage findings and print a paste-ready installguard.yaml block
@@ -138,7 +139,7 @@ direct:
   detectPublisherChange: true
 ```
 
-Full DSL in [DESIGN.md §4](DESIGN.md#4-policy-dsl). More examples in `examples/policies/` (coming soon).
+Full DSL in [DESIGN.md §4](DESIGN.md#4-policy-dsl). More examples live in `examples/policies/`.
 
 ---
 
@@ -163,7 +164,7 @@ If anything fails policy, scripts never run.
 
 ## Project status
 
-InstallGuard is in **alpha**. Milestones 0–4 are shipped: full lockfile coverage for the three major npm package managers, a multi-signal detection model, deterministic decisions with in-toto attestations, three external signal providers (OSV, deps.dev, OpenSSF Scorecard), and a public `SignalProvider` trait for third-party providers. The next focus areas are sandboxed script execution (M5) and registry-proxy enforcement (M6) — see [ROADMAP.md](ROADMAP.md).
+InstallGuard is in **alpha**. Milestones 0–4 are shipped, plus the first "Beyond npm" slice: PyPI support for `uv.lock`, `poetry.lock`, hashed `requirements.txt`, PyPI registry signals, Scorecard wiring, PEP 740 claimed provenance, and `setup.py`-based sdist scanning. The next focus areas are sandboxed script execution (M5) and registry-proxy enforcement (M6) — see [ROADMAP.md](ROADMAP.md).
 
 If you're interested in early adoption, threat-model review, real-world lockfiles for adapter testing, or contributing rule ideas, please open an issue.
 
@@ -181,7 +182,7 @@ If you're interested in early adoption, threat-model review, real-world lockfile
 
 1. **Preventative over reactive.** Reduce exposure; don't only chase known IOCs.
 2. **Deterministic and auditable.** Every decision is recorded, hashable, and signable.
-3. **Offline-capable by default.** No phone-home. Air-gapped deployments are first-class.
+3. **Offline-capable.** No telemetry or hidden phone-home path. Air-gapped deployments are first-class.
 4. **Boring distribution.** Single static binary. No `node_modules`. No install scripts of our own.
 5. **Operationalise existing controls.** Don't reinvent pnpm, Sigstore, or OSV — orchestrate them.
 6. **Honest about limits.** See [whitepaper §20](whitepaper.md#20-limitations--trade-offs).
