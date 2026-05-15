@@ -185,12 +185,19 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Two non-overlapping globs. `installguard-*` already matches
+          # the cosign sidecars for binaries (they're named
+          # `installguard-<target>.cosign.bundle` / `.sig` / `.pem`);
+          # `checksums.txt*` picks up `checksums.txt` plus its sidecars.
+          # Earlier revisions had explicit `*.cosign.bundle` / `*.sig`
+          # / `*.pem` lines too, which matched the same binary
+          # sidecars a second time and caused softprops to upload
+          # them concurrently — hitting "asset already exists" race
+          # conditions that occasionally hard-failed the job
+          # (v0.3.1).
           files: |
             binaries/installguard-*
-            binaries/checksums.txt
-            binaries/*.cosign.bundle
-            binaries/*.sig
-            binaries/*.pem
+            binaries/checksums.txt*
           generate_release_notes: true
 
   # ── SLSA Build Level 3 provenance ────────────────────────────────────────────

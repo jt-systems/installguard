@@ -11,6 +11,26 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-05-15
+
+### Fixed
+
+* **Release workflow no longer races itself uploading assets.** The
+  `softprops/action-gh-release` `files:` glob list had three
+  redundant entries (`*.cosign.bundle`, `*.sig`, `*.pem`) that
+  matched the same files as the broader `installguard-*` glob,
+  because the cosign sidecars are named
+  `installguard-<target>.cosign.bundle` (etc.). The action
+  uploaded each sidecar twice concurrently and hit GitHub's
+  "asset already exists" race-condition path; the v0.3.1 run
+  retried, refreshed, and ultimately failed the `Publish
+  release` job hard, which skipped the SLSA provenance and
+  Homebrew tap-bump jobs. Collapsed to two non-overlapping
+  globs (`installguard-*` + `checksums.txt*`). v0.3.1's
+  binaries and cosign bundles are still on the GitHub release
+  but it is missing SLSA provenance and the Homebrew tap was
+  not bumped — use v0.3.2 for the full release.
+
 ## [0.3.1] — 2026-05-15
 
 Three small correctness fixes shipped together — none change a single
