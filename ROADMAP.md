@@ -148,6 +148,7 @@ Apply the model to other ecosystems.
 - ☑ PyPI adapter (`uv.lock`, hashed `requirements.txt`) — 0.2.0
 - ☑ PyPI signal providers (PyPI JSON API, OSV PyPI, deps.dev pypi) — 0.2.1
 - ☑ OpenSSF Scorecard wiring for PyPI — 0.2.2
+- ☑ poetry.lock adapter — 0.2.3
 - ☐ PyPI maintainer / publisher signals (PEP 740 attestations as they roll out)
 - ☐ sdist `setup.py` static analysis
 - ☐ `poetry.lock` adapter
