@@ -67,18 +67,30 @@ impl DepsDevProvider {
         })
     }
 
+    /// Fetch the deps.dev v3alpha version record.
+    ///
+    /// * `Ok(Some(record))` — deps.dev returned a 2xx with a
+    ///   parseable body for this `(system, name, version)`.
+    /// * `Ok(None)` — deps.dev returned 404 / 410. The package
+    ///   simply isn't indexed yet (very common for fresh
+    ///   releases). Cached as a soft miss so we don't retry.
+    /// * `Err(reason)` — network failure, 5xx, or decode error.
+    ///   **Not** cached, so a transient outage doesn't poison
+    ///   the rest of the run; the caller surfaces this as a
+    ///   `Signal::Unavailable` rather than letting absence look
+    ///   like a clean signal.
     async fn fetch_version(
         &self,
         system: &str,
         name: &str,
         version: &str,
-    ) -> Option<VersionRecord> {
+    ) -> Result<Option<VersionRecord>, String> {
         // Cache key includes the system so npm:foo@1 and pypi:foo@1
         // never alias.
         let key = format!("{system}/{name}@{version}");
         if let Ok(cache) = self.cache.lock() {
             if let Some(hit) = cache.get(&key) {
-                return hit.clone();
+                return Ok(hit.clone());
             }
         }
         let url = format!(
@@ -89,24 +101,31 @@ impl DepsDevProvider {
             urlencoding(version)
         );
         tracing::debug!(url, "fetching deps.dev version");
-        let result = async {
-            let resp = self
-                .client
-                .get(&url)
-                .header(reqwest::header::ACCEPT, "application/json")
-                .send()
-                .await
-                .ok()?;
-            if !resp.status().is_success() {
-                return None;
+        let resp = self
+            .client
+            .get(&url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|e| format!("deps.dev request failed: {e}"))?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::GONE {
+            if let Ok(mut cache) = self.cache.lock() {
+                cache.insert(key, None);
             }
-            resp.json::<VersionRecord>().await.ok()
+            return Ok(None);
         }
-        .await;
+        if !status.is_success() {
+            return Err(format!("deps.dev HTTP {status}"));
+        }
+        let record: VersionRecord = resp
+            .json()
+            .await
+            .map_err(|e| format!("deps.dev decode failed: {e}"))?;
         if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(key, result.clone());
+            cache.insert(key, Some(record.clone()));
         }
-        result
+        Ok(Some(record))
     }
 }
 
@@ -124,14 +143,26 @@ impl SignalProvider for DepsDevProvider {
         let Some(system) = depsdev_system(dep.ecosystem) else {
             return Ok(Vec::new());
         };
-        let Some(record) = self.fetch_version(system, &dep.name, &dep.version).await else {
-            // Catalogue silence is not an error \u2014 the package may
-            // simply not be indexed yet. Emit nothing so policy
-            // doesn't fire on absence; absence-as-suspicious is
-            // not the model here.
-            return Ok(Vec::new());
-        };
-        Ok(vec![compute_project_metadata(&record)])
+        match self.fetch_version(system, &dep.name, &dep.version).await {
+            Ok(Some(record)) => Ok(vec![compute_project_metadata(&record)]),
+            Ok(None) => {
+                // Catalogue silence (404) is not an error — the
+                // package may simply not be indexed yet. Emit
+                // nothing; absence-as-suspicious is not the model.
+                Ok(Vec::new())
+            }
+            Err(reason) => {
+                // Network / 5xx / decode failures get surfaced as
+                // an Unavailable signal so policy can choose to
+                // gate on it (`severity: signal-unavailable: block`)
+                // rather than silently treating an outage as
+                // "no risk recorded".
+                Ok(vec![Signal::Unavailable {
+                    provider: "deps.dev".to_string(),
+                    reason,
+                }])
+            }
+        }
     }
 }
 

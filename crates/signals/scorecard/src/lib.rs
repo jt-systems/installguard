@@ -98,27 +98,49 @@ impl ScorecardProvider {
         pick_pypi_repo_url(&body.info)
     }
 
-    async fn fetch_score(&self, repo: &str) -> Option<u8> {
+    /// Fetch the OpenSSF Scorecard for a `host/owner/repo` triple.
+    ///
+    /// * `Ok(Some(score))` — Scorecard returned a 2xx with a
+    ///   parseable body.
+    /// * `Ok(None)` — Scorecard returned 404. The project is
+    ///   not indexed; cached as a soft miss.
+    /// * `Err(reason)` — network failure, 5xx, or decode error.
+    ///   Not cached. Caller surfaces as `Signal::Unavailable`
+    ///   so a Scorecard outage doesn't masquerade as "no risk
+    ///   recorded" on a clean run.
+    async fn fetch_score(&self, repo: &str) -> Result<Option<u8>, String> {
         if let Ok(cache) = self.cache.lock() {
             if let Some(hit) = cache.get(repo) {
-                return *hit;
+                return Ok(*hit);
             }
         }
         let url = format!("{}/projects/{}", self.scorecard_base, repo);
         tracing::debug!(url, "fetching scorecard");
-        let result = async {
-            let resp = self.client.get(&url).send().await.ok()?;
-            if !resp.status().is_success() {
-                return None;
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("scorecard request failed: {e}"))?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            if let Ok(mut cache) = self.cache.lock() {
+                cache.insert(repo.to_string(), None);
             }
-            let body: ScorecardResponse = resp.json().await.ok()?;
-            Some(bucket_score(body.score))
+            return Ok(None);
         }
-        .await;
+        if !status.is_success() {
+            return Err(format!("scorecard HTTP {status}"));
+        }
+        let body: ScorecardResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("scorecard decode failed: {e}"))?;
+        let score = bucket_score(body.score);
         if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(repo.to_string(), result);
+            cache.insert(repo.to_string(), Some(score));
         }
-        result
+        Ok(Some(score))
     }
 }
 
@@ -142,20 +164,29 @@ impl SignalProvider for ScorecardProvider {
             }
             Ecosystem::Pypi => self.fetch_pypi_repo_url(&dep.name, &dep.version).await,
         };
+        // Repo discovery is best-effort — silent on absence so we
+        // don't double-count packument / metadata fetcher failures
+        // already surfaced by the npm-registry / pypi-registry
+        // providers. The load-bearing failure mode is the
+        // Scorecard service itself, which we surface below.
         let Some(repo_url) = repo_url else {
             return Ok(Vec::new());
         };
         let Some(triple) = extract_repo_triple(&repo_url) else {
             return Ok(Vec::new());
         };
-        let Some(score) = self.fetch_score(&triple).await else {
-            return Ok(Vec::new());
-        };
-        Ok(vec![Signal::ScorecardScore {
-            score,
-            repo: triple,
-            source: SOURCE.to_string(),
-        }])
+        match self.fetch_score(&triple).await {
+            Ok(Some(score)) => Ok(vec![Signal::ScorecardScore {
+                score,
+                repo: triple,
+                source: SOURCE.to_string(),
+            }]),
+            Ok(None) => Ok(Vec::new()),
+            Err(reason) => Ok(vec![Signal::Unavailable {
+                provider: "openssf-scorecard".to_string(),
+                reason,
+            }]),
+        }
     }
 }
 

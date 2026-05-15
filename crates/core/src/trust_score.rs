@@ -19,7 +19,10 @@
 //!
 //! - `lifecycle_scripts`        −15  (broad attack surface marker)
 //! - `suspicious_script`        −35  (high-confidence runtime hazard)
-//! - `published_at` (fresh)     −10  (very recent publish)
+//! - `published_at` (≤ 14d)     −10  (very recent publish; outside
+//!   the window the contribution is zero — every package is
+//!   `published_at` *something*, so a flat penalty would silently
+//!   cap every healthy package at 90)
 //! - `publisher_change`         −10  (new maintainer hand-off)
 //! - `deprecated_version`       −10  (avoid churn but not a hazard)
 //! - `version_surface_change`    −5  (mild novelty)
@@ -41,9 +44,17 @@
 //! `trust-weights` slice once we have field data showing which
 //! defaults are wrong in practice.
 
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::signal::{Signal, SignalSet};
+
+/// Number of days within which a `published_at` signal contributes
+/// the freshness penalty. Outside this window the contribution is
+/// zero — the signal still exists for audit / explain output, it
+/// just no longer counts against the trust score. Aligns with the
+/// 14-day default `minimumReleaseAge` recommendation in the docs.
+pub const FRESHNESS_WINDOW_DAYS: i64 = 14;
 
 /// A single weighted contribution to a [`TrustScore`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -68,14 +79,24 @@ pub struct TrustScore {
 }
 
 impl TrustScore {
-    /// Computes a trust score for the given signal set. Pure;
-    /// safe to call repeatedly.
+    /// Computes a trust score for the given signal set, using the
+    /// current wall-clock time for any signals that are time-relative
+    /// (today: only `published_at`'s freshness window). For
+    /// deterministic tests, prefer [`TrustScore::compute_at`].
     #[must_use]
     pub fn compute(signals: &SignalSet) -> Self {
+        Self::compute_at(signals, Utc::now())
+    }
+
+    /// Like [`TrustScore::compute`] but with `now` injected so
+    /// tests are deterministic and policy callers can pass the
+    /// same evaluation timestamp they used elsewhere.
+    #[must_use]
+    pub fn compute_at(signals: &SignalSet, now: DateTime<Utc>) -> Self {
         let mut running: i32 = 100;
         let mut contributions = Vec::new();
         for signal in &signals.signals {
-            let (kind, delta, rationale) = score_signal(signal);
+            let (kind, delta, rationale) = score_signal_at(signal, now);
             // Skip neutral signals so the contribution log stays
             // signal (heh) and doesn't fill with zero-weight noise.
             if delta == 0 {
@@ -96,9 +117,22 @@ impl TrustScore {
     }
 }
 
-fn score_signal(signal: &Signal) -> (&'static str, i16, &'static str) {
+fn score_signal_at(signal: &Signal, now: DateTime<Utc>) -> (&'static str, i16, &'static str) {
     match signal {
-        Signal::PublishedAt { .. } => ("published_at", -10, "version was published very recently"),
+        Signal::PublishedAt { at } => {
+            // Freshness window: only penalise versions published
+            // within the last `FRESHNESS_WINDOW_DAYS`. Outside the
+            // window the package is steady-state and the signal
+            // carries no risk weight — a flat penalty would silently
+            // cap every healthy package's trust score at 90 and
+            // make `minTrustScore` block the wrong things.
+            let age = now.signed_duration_since(*at);
+            if age >= Duration::zero() && age < Duration::days(FRESHNESS_WINDOW_DAYS) {
+                ("published_at", -10, "version was published very recently")
+            } else {
+                ("published_at", 0, "")
+            }
+        }
         Signal::LifecycleScripts { .. } => (
             "lifecycle_scripts",
             -15,
@@ -280,10 +314,59 @@ mod tests {
     }
 
     #[test]
-    fn published_at_carries_weight() {
+    fn published_at_carries_weight_inside_window() {
+        let now = Utc::now();
         let mut s = SignalSet::default();
-        s.push(Signal::PublishedAt { at: Utc::now() });
-        let score = TrustScore::compute(&s);
+        s.push(Signal::PublishedAt {
+            at: now - chrono::Duration::days(2),
+        });
+        let score = TrustScore::compute_at(&s, now);
         assert_eq!(score.value, 90);
+        assert_eq!(score.contributions.len(), 1);
+        assert_eq!(score.contributions[0].signal, "published_at");
+    }
+
+    #[test]
+    fn published_at_outside_window_is_neutral() {
+        let now = Utc::now();
+        let mut s = SignalSet::default();
+        // Two months old: well outside the 14-day freshness window.
+        s.push(Signal::PublishedAt {
+            at: now - chrono::Duration::days(60),
+        });
+        let score = TrustScore::compute_at(&s, now);
+        assert_eq!(
+            score.value, 100,
+            "steady-state package must score full trust"
+        );
+        assert!(
+            score.contributions.is_empty(),
+            "neutral signals must not appear in the breakdown"
+        );
+    }
+
+    #[test]
+    fn published_at_at_window_boundary_is_neutral() {
+        // Boundary is half-open at FRESHNESS_WINDOW_DAYS exactly.
+        let now = Utc::now();
+        let mut s = SignalSet::default();
+        s.push(Signal::PublishedAt {
+            at: now - chrono::Duration::days(FRESHNESS_WINDOW_DAYS),
+        });
+        let score = TrustScore::compute_at(&s, now);
+        assert_eq!(score.value, 100);
+    }
+
+    #[test]
+    fn published_at_in_future_is_neutral() {
+        // Clock skew or fake metadata: treat future-dated publishes
+        // as outside the window rather than counting them as "fresh".
+        let now = Utc::now();
+        let mut s = SignalSet::default();
+        s.push(Signal::PublishedAt {
+            at: now + chrono::Duration::days(1),
+        });
+        let score = TrustScore::compute_at(&s, now);
+        assert_eq!(score.value, 100);
     }
 }

@@ -80,11 +80,14 @@ pub enum Reason {
         age_days: u32,
         threshold_days: u32,
     },
-    /// Policy required cryptographic provenance for this dependency
-    /// but no structurally-matching `ProvenanceClaimed` signal was
-    /// produced — either the publisher didn't sign, the bundle
-    /// fetch failed, or the in-toto subject didn't match
-    /// `dist.integrity`.
+    /// Policy required a provenance attestation for this
+    /// dependency but no `ProvenanceClaimed` signal was produced
+    /// — either the publisher didn't sign, the bundle fetch
+    /// failed, or the in-toto subject didn't match
+    /// `dist.integrity` (npm) / the Integrity API returned 404
+    /// (PyPI). The current gate is structural-only; cryptographic
+    /// verification against Sigstore Fulcio is tracked under
+    /// ROADMAP M9.
     ProvenanceMissing,
     /// A published security advisory matches this dependency at
     /// or above the policy's severity floor. `id` is the canonical

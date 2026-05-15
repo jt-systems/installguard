@@ -104,7 +104,7 @@
         },
         "requireProvenance": {
           "default": false,
-          "description": "Require the dependency to carry verified npm provenance (a Sigstore DSSE bundle whose in-toto subject digest matches the tarball integrity). When `true`, missing or unverifiable provenance is reported as [`Reason::ProvenanceMissing`]. Off by default — most of the npm ecosystem does not yet publish with `--provenance`, so global enforcement breaks builds. Recommended scope: `direct.requireProvenance: true` for first-party deps in regulated environments.",
+          "description": "Require the dependency to carry a **claimed** provenance attestation: an npm provenance bundle whose in-toto subject digest matches the tarball's `dist.integrity`, or a PyPI [PEP 740](https://peps.python.org/pep-0740/) Trusted Publisher attestation served by the [Integrity API](https://docs.pypi.org/api/integrity/).\n\n**What this gate does NOT do today:** it does not verify the bundle's DSSE signature against a pinned Sigstore Fulcio root, nor verify the Rekor inclusion proof. A structurally-matching but cryptographically unverified bundle satisfies the gate. Tightening to a verified signal is tracked under ROADMAP M9 (Sigstore Fulcio verification); when that lands, this gate will require the verified peer of the signal and the present behaviour will move behind a separate, weaker `requireProvenanceClaim` toggle.\n\nWhen `true`, missing provenance is reported as [`Reason::ProvenanceMissing`]. Off by default — most of the npm and PyPI ecosystems do not yet publish with provenance, so global enforcement breaks builds. Recommended scope: `direct.requireProvenance: true` for first-party deps in regulated environments.",
           "type": "boolean"
         }
       },

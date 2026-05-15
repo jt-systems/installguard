@@ -90,14 +90,30 @@ pub struct Defaults {
     /// flagging legitimate new maintainers in steady-state projects.
     #[serde(default)]
     pub min_maintainer_account_age_days: u32,
-    /// Require the dependency to carry verified npm provenance
-    /// (a Sigstore DSSE bundle whose in-toto subject digest matches
-    /// the tarball integrity). When `true`, missing or unverifiable
-    /// provenance is reported as [`Reason::ProvenanceMissing`].
-    /// Off by default — most of the npm ecosystem does not yet
-    /// publish with `--provenance`, so global enforcement breaks
-    /// builds. Recommended scope: `direct.requireProvenance: true`
-    /// for first-party deps in regulated environments.
+    /// Require the dependency to carry a **claimed** provenance
+    /// attestation: an npm provenance bundle whose in-toto subject
+    /// digest matches the tarball's `dist.integrity`, or a PyPI
+    /// [PEP 740](https://peps.python.org/pep-0740/) Trusted
+    /// Publisher attestation served by the
+    /// [Integrity API](https://docs.pypi.org/api/integrity/).
+    ///
+    /// **What this gate does NOT do today:** it does not verify
+    /// the bundle's DSSE signature against a pinned Sigstore
+    /// Fulcio root, nor verify the Rekor inclusion proof. A
+    /// structurally-matching but cryptographically unverified
+    /// bundle satisfies the gate. Tightening to a verified
+    /// signal is tracked under ROADMAP M9 (Sigstore Fulcio
+    /// verification); when that lands, this gate will require
+    /// the verified peer of the signal and the present
+    /// behaviour will move behind a separate, weaker
+    /// `requireProvenanceClaim` toggle.
+    ///
+    /// When `true`, missing provenance is reported as
+    /// [`Reason::ProvenanceMissing`]. Off by default — most of
+    /// the npm and PyPI ecosystems do not yet publish with
+    /// provenance, so global enforcement breaks builds.
+    /// Recommended scope: `direct.requireProvenance: true` for
+    /// first-party deps in regulated environments.
     #[serde(default)]
     pub require_provenance: bool,
     /// Minimum aggregate trust score in `[0, 100]` (see
@@ -500,9 +516,16 @@ impl Policy {
         }
         // ── Provenance requirement ──────────────────────────────────
         // Opt-in: when the toggle is on, the *absence* of a
-        // ProvenanceVerified signal is itself a reason. The signal
-        // is positive evidence — emitted only when verification
-        // succeeded — so this check is symmetric and correct.
+        // ProvenanceClaimed signal is itself a reason. The signal
+        // is positive evidence — emitted only when the publisher
+        // signed AND the in-toto subject digest matches the
+        // tarball — so this check is symmetric and correct for
+        // the "claimed" trust level.
+        //
+        // TODO(M9): tighten to ProvenanceVerified once the Fulcio
+        // chain + Rekor proof check lands. The signal shape is
+        // already designed to support the upgrade without a
+        // policy schema break (see Signal::ProvenanceClaimed doc).
         if self.require_provenance_for(dep) && signals.provenance_claimed().is_none() {
             reasons.push(Reason::ProvenanceMissing);
         }
@@ -583,7 +606,7 @@ impl Policy {
         // crosses the threshold; this branch only fires the Reason.
         let trust_threshold = self.min_trust_score_for(dep);
         if trust_threshold > 0 {
-            let score = crate::trust_score::TrustScore::compute(signals);
+            let score = crate::trust_score::TrustScore::compute_at(signals, now);
             if score.value < trust_threshold {
                 reasons.push(Reason::TrustScoreBelowThreshold {
                     score: score.value,

@@ -11,6 +11,72 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.2.6] — 2026-05-15
+
+**Honesty pass on the provenance gate, fail-loud on catalogue
+outages, and a freshness window on the trust-score `published_at`
+penalty.** No new providers; this release closes three correctness
+issues that an external review surfaced.
+
+* **`requireProvenance` no longer overclaims.** The doc-comment
+  said "verified npm provenance" but the gate has only ever
+  checked that the bundle's in-toto subject digest matches the
+  tarball's `dist.integrity` (and, since 0.2.4, that PyPI's
+  Integrity API returned 200 for the file). Both are *claimed*
+  attestations, not *cryptographically verified* ones — we never
+  walk the DSSE signature against a pinned Sigstore Fulcio root,
+  and we never verify the Rekor inclusion proof. The
+  `requireProvenance` doc, the `Reason::ProvenanceMissing` doc,
+  and the policy-gate comment all now say so explicitly. The
+  schema regenerates with the corrected text. A
+  `TODO(M9)` marks where the verified-peer signal will land
+  alongside Sigstore Fulcio verification; when it does, this
+  gate will require the verified signal and the present
+  behaviour will move behind a separate, weaker
+  `requireProvenanceClaim` toggle. **No behaviour change** —
+  every gate that fired before still fires; we only owned what
+  we ship.
+
+* **deps.dev and Scorecard now distinguish "not indexed" from
+  "outage".** Both providers used to collapse network failures,
+  5xx responses, and decode errors to a silent `None`, then
+  return an empty signal set. The policy layer's existing
+  `signal-unavailable` reason therefore never fired and a clean
+  scan could hide a deps.dev outage or a Scorecard interference.
+  Both providers now return `Result<Option<T>, String>` from
+  their fetch helpers: `Ok(Some(_))` is a hit, `Ok(None)` is a
+  404/410 (legitimate absence — the package isn't indexed yet,
+  cached as a soft miss), and `Err(reason)` covers every other
+  failure mode (network, 5xx, decode, both not cached). The
+  `signals()` impls lift the `Err` arm to a
+  `Signal::Unavailable { provider, reason }`. Operators who want
+  hard failure on catalogue outages can now use
+  `severity: signal-unavailable: block`; the default stays at
+  `warn` so transient 5xxs don't break CI.
+
+* **The trust-score `published_at` penalty now respects a
+  freshness window.** The matrix in the `trust_score` doc said
+  the −10 was for "very recent publish", but the rule actually
+  applied to every package — every dependency carries a
+  `published_at`, so the steady-state trust score was silently
+  capped at 90 and `minTrustScore: 90+` would block healthy
+  packages for the wrong reason. The penalty now only applies
+  when the publish time is within
+  `trust_score::FRESHNESS_WINDOW_DAYS` (14 days, aligned with
+  the docs' default `minimumReleaseAge` recommendation). Outside
+  the window the contribution is zero and the signal is omitted
+  from the breakdown — it still appears in the audit signal set
+  for explainability. Future-dated publishes (clock skew or
+  forged metadata) are also treated as outside the window
+  rather than counting as "fresh". `TrustScore::compute` keeps
+  its current signature for backwards compatibility; a new
+  `TrustScore::compute_at(set, now)` is added for deterministic
+  callers (the policy gate now uses it, threading the same
+  `now` it uses for every other time-relative check).
+
+  Smoke-validated: `pyyaml@6.0.1` (a 2023 release) now scores
+  100/100 on a default policy instead of 90/100.
+
 ## [0.2.5] — 2026-05-15
 
 **PyPI sdists are now scanned for install-time RCE patterns.**
