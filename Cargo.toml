@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.16"
+version = "0.1.17"
 edition = "2021"
 rust-version = "1.86"
 license = "Apache-2.0"
@@ -28,15 +28,15 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal
-installguard-core = { path = "crates/core", version = "0.1.16" }
-installguard-adapter-npm = { path = "crates/adapters/npm", version = "0.1.16" }
-installguard-adapter-pnpm = { path = "crates/adapters/pnpm", version = "0.1.16" }
-installguard-adapter-yarn = { path = "crates/adapters/yarn", version = "0.1.16" }
-installguard-signal-npm-registry = { path = "crates/signals/npm-registry", version = "0.1.16" }
-installguard-signal-osv = { path = "crates/signals/osv", version = "0.1.16" }
-installguard-signal-depsdev = { path = "crates/signals/depsdev", version = "0.1.16" }
-installguard-signal-scorecard = { path = "crates/signals/scorecard", version = "0.1.16" }
-installguard-cache = { path = "crates/cache", version = "0.1.16" }
+installguard-core = { path = "crates/core", version = "0.1.17" }
+installguard-adapter-npm = { path = "crates/adapters/npm", version = "0.1.17" }
+installguard-adapter-pnpm = { path = "crates/adapters/pnpm", version = "0.1.17" }
+installguard-adapter-yarn = { path = "crates/adapters/yarn", version = "0.1.17" }
+installguard-signal-npm-registry = { path = "crates/signals/npm-registry", version = "0.1.17" }
+installguard-signal-osv = { path = "crates/signals/osv", version = "0.1.17" }
+installguard-signal-depsdev = { path = "crates/signals/depsdev", version = "0.1.17" }
+installguard-signal-scorecard = { path = "crates/signals/scorecard", version = "0.1.17" }
+installguard-cache = { path = "crates/cache", version = "0.1.17" }
 
 # External
 anyhow = "1.0"

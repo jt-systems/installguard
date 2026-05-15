@@ -50,6 +50,14 @@ impl Default for Ttl {
 /// change. Pure additive changes (a new `Signal` variant) do not need
 /// a bump because old entries simply won't carry the new variant.
 ///
+/// In practice, since 0.1.17 the on-disk entries are *also* stamped
+/// with the producing tool's `CARGO_PKG_VERSION`, and any version
+/// mismatch on read drops the entry just like a schema mismatch. That
+/// belt-and-braces design means signal-shape changes that ship
+/// without a `SCHEMA_VERSION` bump still invalidate cleanly across
+/// releases — closing the historical foot-gun where users had to
+/// `rm -rf ~/Library/Caches/installguard` after every upgrade.
+///
 /// History:
 ///   1 — initial release (v0.1.0).
 ///   2 — v0.1.2: `npm-registry` no longer emits `LifecycleScripts` for
@@ -63,9 +71,23 @@ const SCHEMA_VERSION: u32 = 2;
 /// Sled tree name. Changing this implicitly invalidates older caches.
 const TREE_NAME: &str = "signals_v1";
 
+/// Producing tool version baked into every entry on write. A read whose
+/// stored `tool_version` differs from this value is treated as stale and
+/// dropped. This is the load-bearing safety net behind
+/// [`SCHEMA_VERSION`]: signal-shape changes that ship without a
+/// schema bump still invalidate on the next release.
+const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Entry {
     schema: u32,
+    /// Tool version that produced this entry (added in 0.1.17). Older
+    /// entries written before this field existed deserialize with the
+    /// default (`String::new()`), which never equals
+    /// [`TOOL_VERSION`] — so they are dropped on first read under
+    /// 0.1.17+.
+    #[serde(default)]
+    tool_version: String,
     fetched_at: DateTime<Utc>,
     signals: Vec<Signal>,
 }
@@ -97,8 +119,10 @@ impl SignalCache {
             return Ok(None);
         };
         match serde_json::from_slice::<Entry>(&bytes) {
-            Ok(entry) if entry.schema == SCHEMA_VERSION => Ok(Some(entry.signals)),
-            // Drop entries from older schemas; they'll be refetched.
+            Ok(entry) if entry.schema == SCHEMA_VERSION && entry.tool_version == TOOL_VERSION => {
+                Ok(Some(entry.signals))
+            }
+            // Drop entries from older schemas or older tool versions; they'll be refetched.
             _ => {
                 let _ = self.tree.remove(key)?;
                 Ok(None)
@@ -113,10 +137,12 @@ impl SignalCache {
             return Ok(None);
         };
         match serde_json::from_slice::<Entry>(&bytes) {
-            Ok(entry) if entry.schema == SCHEMA_VERSION => Ok(Some(CachedEntry {
-                fetched_at: entry.fetched_at,
-                signals: entry.signals,
-            })),
+            Ok(entry) if entry.schema == SCHEMA_VERSION && entry.tool_version == TOOL_VERSION => {
+                Ok(Some(CachedEntry {
+                    fetched_at: entry.fetched_at,
+                    signals: entry.signals,
+                }))
+            }
             _ => {
                 let _ = self.tree.remove(key)?;
                 Ok(None)
@@ -127,6 +153,7 @@ impl SignalCache {
     pub fn put(&self, key: &str, signals: &[Signal]) -> Result<(), CacheError> {
         let entry = Entry {
             schema: SCHEMA_VERSION,
+            tool_version: TOOL_VERSION.to_string(),
             fetched_at: Utc::now(),
             signals: signals.to_vec(),
         };
@@ -138,6 +165,80 @@ impl SignalCache {
     pub fn flush(&self) -> Result<(), CacheError> {
         self.tree.flush()?;
         Ok(())
+    }
+
+    /// Total number of entries (including any that would be dropped
+    /// on read). Cheap — sled tracks this internally.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.tree.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.tree.is_empty()
+    }
+
+    /// Iterate every entry and report a per-status breakdown. Designed
+    /// for `installguard cache info` — not for hot paths.
+    pub fn stats(&self) -> Result<CacheStats, CacheError> {
+        let mut stats = CacheStats::default();
+        for kv in &self.tree {
+            let (_, bytes) = kv?;
+            stats.total += 1;
+            match serde_json::from_slice::<Entry>(&bytes) {
+                Ok(entry)
+                    if entry.schema == SCHEMA_VERSION && entry.tool_version == TOOL_VERSION =>
+                {
+                    stats.fresh += 1;
+                }
+                Ok(entry) if entry.schema != SCHEMA_VERSION => {
+                    stats.stale_schema += 1;
+                }
+                Ok(_) => {
+                    stats.stale_version += 1;
+                }
+                Err(_) => {
+                    stats.unreadable += 1;
+                }
+            }
+        }
+        Ok(stats)
+    }
+
+    /// Drop every entry. Used by `installguard cache clear`.
+    pub fn clear(&self) -> Result<(), CacheError> {
+        self.tree.clear()?;
+        self.tree.flush()?;
+        Ok(())
+    }
+}
+
+/// Per-status breakdown of cache contents. Returned by
+/// [`SignalCache::stats`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CacheStats {
+    pub total: usize,
+    /// Entries whose `schema` and `tool_version` both match the
+    /// current build — will be served from cache subject to TTL.
+    pub fresh: usize,
+    /// Entries written by an older `SCHEMA_VERSION`. Will be dropped
+    /// on next read.
+    pub stale_schema: usize,
+    /// Entries written by a different tool version (older or
+    /// newer). Will be dropped on next read.
+    pub stale_version: usize,
+    /// Entries whose JSON payload no longer parses. Will be dropped
+    /// on next read.
+    pub unreadable: usize,
+}
+
+impl CacheStats {
+    /// Sum of all non-fresh categories — entries that occupy disk
+    /// space but will never be served.
+    #[must_use]
+    pub fn drop_on_next_read(self) -> usize {
+        self.stale_schema + self.stale_version + self.unreadable
     }
 }
 
@@ -299,5 +400,106 @@ mod tests {
         assert_ne!(a, b);
         assert_ne!(a, c);
         assert_eq!(a, cache_key("npm-registry", &dep("axios", "1.0.0")));
+    }
+
+    /// Entries written by an older tool version (or by a release that
+    /// shipped before stamping existed) are treated as stale and
+    /// dropped on first read \u2014 even when the schema number still
+    /// matches. This is the safety net behind the historical "rm -rf
+    /// the cache after every upgrade" foot-gun.
+    #[test]
+    fn entry_with_mismatched_tool_version_is_dropped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = SignalCache::open(tmp.path()).unwrap();
+        let key = "k";
+        let stale = Entry {
+            schema: SCHEMA_VERSION,
+            tool_version: "0.0.0-from-the-before-times".into(),
+            fetched_at: Utc::now(),
+            signals: vec![Signal::PublishedAt { at: Utc::now() }],
+        };
+        cache
+            .tree
+            .insert(key, serde_json::to_vec(&stale).unwrap())
+            .unwrap();
+        assert_eq!(cache.len(), 1);
+        // First read drops it.
+        assert!(cache.get(key).unwrap().is_none());
+        assert_eq!(cache.len(), 0);
+    }
+
+    /// Legacy entries from before the `tool_version` field existed
+    /// deserialise with the default empty string and are dropped on
+    /// first read \u2014 same path as a true version mismatch. Guards
+    /// against in-place upgrades from 0.1.16 and earlier.
+    #[test]
+    fn legacy_entry_without_tool_version_is_dropped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = SignalCache::open(tmp.path()).unwrap();
+        let key = "k";
+        // Hand-rolled JSON in the pre-0.1.17 shape (no tool_version field).
+        let raw = format!(
+            r#"{{"schema":{SCHEMA_VERSION},"fetched_at":"{}","signals":[]}}"#,
+            Utc::now().to_rfc3339()
+        );
+        cache.tree.insert(key, raw.as_bytes()).unwrap();
+        assert!(cache.get(key).unwrap().is_none());
+    }
+
+    #[test]
+    fn stats_breaks_down_by_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = SignalCache::open(tmp.path()).unwrap();
+        // Fresh: schema and version both current.
+        cache
+            .put("fresh", &[Signal::PublishedAt { at: Utc::now() }])
+            .unwrap();
+        // Stale by version.
+        let stale_v = Entry {
+            schema: SCHEMA_VERSION,
+            tool_version: "0.0.0".into(),
+            fetched_at: Utc::now(),
+            signals: vec![],
+        };
+        cache
+            .tree
+            .insert("stale-v", serde_json::to_vec(&stale_v).unwrap())
+            .unwrap();
+        // Stale by schema.
+        let stale_s = Entry {
+            schema: SCHEMA_VERSION + 99,
+            tool_version: TOOL_VERSION.to_string(),
+            fetched_at: Utc::now(),
+            signals: vec![],
+        };
+        cache
+            .tree
+            .insert("stale-s", serde_json::to_vec(&stale_s).unwrap())
+            .unwrap();
+        // Unreadable.
+        cache.tree.insert("garbage", b"not json".to_vec()).unwrap();
+
+        let stats = cache.stats().unwrap();
+        assert_eq!(stats.total, 4);
+        assert_eq!(stats.fresh, 1);
+        assert_eq!(stats.stale_version, 1);
+        assert_eq!(stats.stale_schema, 1);
+        assert_eq!(stats.unreadable, 1);
+        assert_eq!(stats.drop_on_next_read(), 3);
+    }
+
+    #[test]
+    fn clear_drops_every_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = SignalCache::open(tmp.path()).unwrap();
+        cache
+            .put("a", &[Signal::PublishedAt { at: Utc::now() }])
+            .unwrap();
+        cache
+            .put("b", &[Signal::PublishedAt { at: Utc::now() }])
+            .unwrap();
+        assert_eq!(cache.len(), 2);
+        cache.clear().unwrap();
+        assert!(cache.is_empty());
     }
 }

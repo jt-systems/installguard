@@ -129,6 +129,41 @@ enum Command {
     /// Always exits 0 — `simulate` is advisory; use `scan` or
     /// `ci` to gate.
     Simulate(SimulateArgs),
+    /// Inspect or manage the on-disk signal cache.
+    ///
+    /// The cache lives under the user cache directory by default
+    /// (`~/Library/Caches/installguard` on macOS,
+    /// `~/.cache/installguard` on Linux,
+    /// `%LOCALAPPDATA%\installguard\Cache` on Windows). Entries are
+    /// auto-invalidated on tool-version change since 0.1.17 — these
+    /// subcommands exist for inspection and the rare case where you
+    /// want to force a clean state without waiting for the next
+    /// release.
+    #[command(subcommand)]
+    Cache(CacheCommand),
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum CacheCommand {
+    /// Print the resolved cache directory path and exit.
+    Path {
+        /// Override the cache directory. Same flag semantics as
+        /// `scan --cache-dir`.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+    },
+    /// Print a per-status breakdown of cache contents (fresh / stale
+    /// by version / stale by schema / unreadable).
+    Info {
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+    },
+    /// Drop every entry in the cache. The next `scan` re-fetches
+    /// signals from the network.
+    Clear {
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -478,6 +513,7 @@ async fn main() -> ExitCode {
         Command::Doctor(args) => run_doctor(args).await,
         Command::Explain(args) => run_explain(args).await,
         Command::Simulate(args) => run_simulate(args).await,
+        Command::Cache(cmd) => run_cache(cmd),
     };
     match result {
         Ok(code) => code,
@@ -825,6 +861,73 @@ fn build_provider(args: &EvalArgs) -> Result<Box<dyn SignalProvider>> {
 fn default_cache_dir() -> Result<PathBuf> {
     let base = dirs::cache_dir().ok_or_else(|| anyhow!("could not determine user cache dir"))?;
     Ok(base.join("installguard"))
+}
+
+// ── `cache` subcommand ──────────────────────────────────────────────────────
+//
+// Inspect / wipe the on-disk signal cache. Pure local I/O — no network,
+// no policy, no lockfile parsing. Always exits 0 unless the cache
+// directory itself is unreadable.
+
+fn run_cache(cmd: CacheCommand) -> Result<ExitCode> {
+    match cmd {
+        CacheCommand::Path { cache_dir } => {
+            let dir = resolve_cache_dir(cache_dir.as_ref())?;
+            println!("{}", dir.display());
+            Ok(ExitCode::SUCCESS)
+        }
+        CacheCommand::Info { cache_dir } => {
+            let dir = resolve_cache_dir(cache_dir.as_ref())?;
+            if !dir.exists() {
+                println!("cache directory: {} (does not exist)", dir.display());
+                println!("entries: 0");
+                return Ok(ExitCode::SUCCESS);
+            }
+            let cache = SignalCache::open(&dir)
+                .with_context(|| format!("opening cache at {}", dir.display()))?;
+            let stats = cache.stats().context("computing cache stats")?;
+            println!("cache directory: {}", dir.display());
+            println!("tool version:    {}", env!("CARGO_PKG_VERSION"));
+            println!("entries total:   {}", stats.total);
+            println!("  fresh:         {}", stats.fresh);
+            println!("  stale (ver):   {}", stats.stale_version);
+            println!("  stale (sch):   {}", stats.stale_schema);
+            println!("  unreadable:    {}", stats.unreadable);
+            let drop = stats.drop_on_next_read();
+            if drop > 0 {
+                println!(
+                    "{drop} entr{} will be dropped on next read; run `installguard cache clear` \
+                     to reclaim disk space immediately.",
+                    if drop == 1 { "y" } else { "ies" }
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        CacheCommand::Clear { cache_dir } => {
+            let dir = resolve_cache_dir(cache_dir.as_ref())?;
+            if !dir.exists() {
+                println!("cache directory does not exist: {}", dir.display());
+                return Ok(ExitCode::SUCCESS);
+            }
+            let cache = SignalCache::open(&dir)
+                .with_context(|| format!("opening cache at {}", dir.display()))?;
+            let before = cache.len();
+            cache.clear().context("clearing cache")?;
+            println!(
+                "cleared {before} entr{} from {}",
+                if before == 1 { "y" } else { "ies" },
+                dir.display(),
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+fn resolve_cache_dir(override_path: Option<&PathBuf>) -> Result<PathBuf> {
+    match override_path {
+        Some(p) => Ok(p.clone()),
+        None => default_cache_dir().context("locating user cache directory"),
+    }
 }
 
 /// Best-effort detection of `ignore-scripts=true` in a project-local

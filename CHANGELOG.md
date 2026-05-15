@@ -11,6 +11,36 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.17] — 2026-05-15
+
+Cache invalidation, finally automatic. The on-disk signal cache
+(`~/Library/Caches/installguard` on macOS, `~/.cache/installguard`
+on Linux, `%LOCALAPPDATA%\installguard\Cache` on Windows) now
+stamps every entry with the producing tool's `CARGO_PKG_VERSION`
+on write. On read, any entry whose stored `tool_version` differs
+from the running build is treated as stale and dropped — exactly
+as a `SCHEMA_VERSION` mismatch already was. Closes the historical
+foot-gun where signal-shape changes shipped between schema bumps
+left users hand-running `rm -rf ~/Library/Caches/installguard`
+after every release.
+
+Legacy entries written by 0.1.16 and earlier (which had no
+`tool_version` field) deserialise with the default empty string
+and are dropped on first read under 0.1.17 — guaranteeing a clean
+slate on the upgrade.
+
+New `installguard cache` subcommand for inspecting and managing
+the cache without reaching for `rm`:
+
+* `installguard cache path` — prints the resolved cache directory
+  and exits.
+* `installguard cache info` — per-status breakdown (fresh / stale
+  by version / stale by schema / unreadable) plus the running
+  tool version.
+* `installguard cache clear` — drops every entry; the next `scan`
+  re-fetches signals from the network. Both subcommands honour
+  `--cache-dir` for parity with `scan`.
+
 ## [0.1.16] — 2026-05-15
 
 Type-system placeholders for PyPI: `Ecosystem::Pypi` and
