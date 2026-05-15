@@ -1,7 +1,7 @@
 # InstallGuard
 
-> **Dependency freshness & install-script governance for modern package ecosystems.**
-> Reduce exposure to short-lived malicious releases without disrupting developer workflow.
+> **Supply-chain policy gate for npm, pnpm, yarn, and PyPI.**
+> Block risky dependencies before install: typosquats, malicious install-time code, publisher churn, too-fresh releases, and known advisories.
 
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-alpha-yellow.svg)](ROADMAP.md)
