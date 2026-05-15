@@ -184,7 +184,7 @@ impl SignalProvider for NpmRegistryProvider {
         if let Some(change) = detect_version_surface_change(&body, &dep.version) {
             out.push(change);
         }
-        if let Some(anomaly) = detect_dist_tag_anomaly(&body) {
+        if let Some(anomaly) = detect_dist_tag_anomaly(&body, &dep.version) {
             out.push(anomaly);
         }
 
@@ -572,28 +572,46 @@ fn bin_names(bin: Option<&serde_json::Value>) -> Vec<String> {
 /// the “highest” comparison because shipping `2.0.0-rc.1` while
 /// `latest=1.4.0` is normal release-train behaviour, not an attack.
 ///
-/// We only fire when the gap crosses a major-version boundary
-/// (i.e. `latest.major < highest.major`). Same-major patch / minor
-/// drift is overwhelmingly intentional LTS-line maintenance — e.g.
-/// Storybook keeps `latest=8.6.14` while `8.6.18` exists because
-/// `8.6.x` is the supported line and `9.x` rides `next` — and is
-/// the dominant source of false-positive blocks in real lockfiles.
-/// A genuine compromised-account "rollback" attack ships a patch
-/// or minor *under* the existing major (e.g. `1.4.5` after
-/// `latest` was `1.5.0`), which appears as `latest.major ==
-/// highest.major` AND `latest < highest` — exactly the case we no
-/// longer flag here. The signal is currently structural and one-shot,
-/// with no packument history; once we cache the prior `latest` value
-/// we can re-add the same-major case as a separate, history-aware
-/// signal. Until then, suppressing same-major gaps trades a class
-/// of true positives we cannot reliably distinguish from LTS
-/// maintenance against far higher precision on the cross-major case.
+/// Three suppression rules layered on top of the structural check
+/// kill the dominant false-positive classes seen on real lockfiles:
+///
+/// 1. **Sentinel filter.** Versions with `major >= 999` are dropped
+///    from the `max_release` candidate set. Examples: `react-native`
+///    publishes `1000.0.0` precisely to break `npm install
+///    react-native@latest` because RN's release line isn't compatible
+///    with semver-major expectations. Treating the sentinel as the
+///    “highest” produces a guaranteed false positive for *every*
+///    React Native lockfile in existence; filtering it lets the real
+///    next-highest (e.g. `0.85.3`) compare against `latest`.
+///
+/// 2. **Same-major suppression.** Patch / minor drift inside one
+///    major (e.g. Storybook keeping `latest=8.6.14` while `8.6.18`
+///    exists) is dominated by intentional LTS maintenance. The
+///    rollback-attack pattern *within* a major is indistinguishable
+///    from LTS without packument history; we trade those true
+///    positives for far higher precision until we cache prior
+///    `latest` values.
+///
+/// 3. **User-bypass suppression.** If the resolved dependency
+///    version is itself `>= max_release`, the user has pinned past
+///    `latest` deliberately (e.g. `accepts@2.0.0` while `latest=1.3.8`
+///    during a cautious 2.x rollout) and the tag drift is irrelevant
+///    to *their* install. Symmetrically, if the resolved version is
+///    on a major *older* than both `latest` and `max_release`, the
+///    user has explicitly stepped off the `latest` train (e.g.
+///    `@expo/cli@54.0.24` while Expo SDK 55 is `latest` and SDK 56
+///    is published) — again, the tag drift is information about an
+///    ecosystem they're not on, not about *their* dependency.
 ///
 /// Returns `None` when there is no `latest` tag, the tag points to
 /// an unparseable version, the tag points at the maximum
-/// non-prerelease version (the healthy case), or the gap is within
-/// a single major.
-fn detect_dist_tag_anomaly(packument: &Packument) -> Option<Signal> {
+/// non-prerelease (the healthy case), or any of the three
+/// suppressions above apply.
+fn detect_dist_tag_anomaly(packument: &Packument, dep_version: &str) -> Option<Signal> {
+    /// npm convention for “do not install” sentinel versions; major
+    /// version 999 or higher is virtually never a legitimate release.
+    const SENTINEL_MAJOR_FLOOR: u64 = 999;
+
     let latest = packument.dist_tags.get("latest")?;
     let latest_sem = Version::parse(latest).ok()?;
 
@@ -602,16 +620,25 @@ fn detect_dist_tag_anomaly(packument: &Packument) -> Option<Signal> {
         .keys()
         .filter_map(|v| Version::parse(v).ok())
         .filter(|v| v.pre.is_empty())
+        .filter(|v| v.major < SENTINEL_MAJOR_FLOOR)
         .max()?;
 
     if latest_sem >= max_release || latest_sem.major == max_release.major {
-        None
-    } else {
-        Some(Signal::DistTagAnomaly {
-            latest_version: latest.clone(),
-            highest_published: max_release.to_string(),
-        })
+        return None;
     }
+
+    // User-bypass: the operator has already opted out of the `latest`
+    // train for this dep, so the tag drift doesn't affect their pin.
+    if let Ok(dep_sem) = Version::parse(dep_version) {
+        if dep_sem >= max_release || dep_sem.major < latest_sem.major {
+            return None;
+        }
+    }
+
+    Some(Signal::DistTagAnomaly {
+        latest_version: latest.clone(),
+        highest_published: max_release.to_string(),
+    })
 }
 
 fn encode_name(name: &str) -> String {
@@ -1129,7 +1156,7 @@ mod tests {
     #[test]
     fn dist_tag_anomaly_detects_latest_pointing_backwards() {
         let p = pkmt_with_dist_tags(&["1.0.0", "1.1.0", "2.0.0"], &[("latest", "1.1.0")]);
-        match detect_dist_tag_anomaly(&p).expect("present") {
+        match detect_dist_tag_anomaly(&p, "1.1.0").expect("present") {
             Signal::DistTagAnomaly {
                 latest_version,
                 highest_published,
@@ -1144,20 +1171,20 @@ mod tests {
     #[test]
     fn dist_tag_anomaly_quiet_when_latest_is_max() {
         let p = pkmt_with_dist_tags(&["1.0.0", "1.1.0", "2.0.0"], &[("latest", "2.0.0")]);
-        assert!(detect_dist_tag_anomaly(&p).is_none());
+        assert!(detect_dist_tag_anomaly(&p, "2.0.0").is_none());
     }
 
     #[test]
     fn dist_tag_anomaly_ignores_prereleases_in_max() {
         // 2.0.0-rc.1 must not count as the "real" max.
         let p = pkmt_with_dist_tags(&["1.0.0", "1.1.0", "2.0.0-rc.1"], &[("latest", "1.1.0")]);
-        assert!(detect_dist_tag_anomaly(&p).is_none());
+        assert!(detect_dist_tag_anomaly(&p, "1.1.0").is_none());
     }
 
     #[test]
     fn dist_tag_anomaly_no_latest_tag_returns_none() {
         let p = pkmt_with_dist_tags(&["1.0.0", "2.0.0"], &[("next", "2.0.0")]);
-        assert!(detect_dist_tag_anomaly(&p).is_none());
+        assert!(detect_dist_tag_anomaly(&p, "2.0.0").is_none());
     }
 
     /// Storybook ships `8.6.x` as the supported line and rides
@@ -1168,10 +1195,10 @@ mod tests {
     fn dist_tag_anomaly_quiet_for_same_major_drift() {
         // Patch-level (real Storybook lockfile shape).
         let p = pkmt_with_dist_tags(&["8.6.14", "8.6.15", "8.6.18"], &[("latest", "8.6.14")]);
-        assert!(detect_dist_tag_anomaly(&p).is_none());
+        assert!(detect_dist_tag_anomaly(&p, "8.6.14").is_none());
         // Minor-level inside one major.
         let p = pkmt_with_dist_tags(&["1.0.0", "1.5.0", "1.7.0"], &[("latest", "1.5.0")]);
-        assert!(detect_dist_tag_anomaly(&p).is_none());
+        assert!(detect_dist_tag_anomaly(&p, "1.5.0").is_none());
     }
 
     /// Cross-major regression — `latest` sits on `1.x` while `2.x`
@@ -1180,7 +1207,47 @@ mod tests {
     #[test]
     fn dist_tag_anomaly_fires_across_major_boundary() {
         let p = pkmt_with_dist_tags(&["1.0.0", "1.1.0", "2.0.0"], &[("latest", "1.1.0")]);
-        assert!(detect_dist_tag_anomaly(&p).is_some());
+        assert!(detect_dist_tag_anomaly(&p, "1.1.0").is_some());
+    }
+
+    /// React Native publishes `1000.0.0` as a deliberate “do not
+    /// install” sentinel. Treating it as `highest_published`
+    /// produces a guaranteed false positive for every RN lockfile;
+    /// the major-999 floor must drop it from the candidate set.
+    #[test]
+    fn dist_tag_anomaly_ignores_sentinel_high_majors() {
+        let p = pkmt_with_dist_tags(&["0.81.5", "0.85.3", "1000.0.0"], &[("latest", "0.85.3")]);
+        assert!(detect_dist_tag_anomaly(&p, "0.81.5").is_none());
+    }
+
+    /// `accepts@2.0.0` while `latest=1.3.8` and `2.0.0` is published
+    /// (cautious 2.x rollout): the user is *on* the highest version,
+    /// so the tag drift is irrelevant to their pin. Suppress.
+    #[test]
+    fn dist_tag_anomaly_quiet_when_user_pinned_at_or_past_max() {
+        let p = pkmt_with_dist_tags(&["1.3.8", "2.0.0"], &[("latest", "1.3.8")]);
+        assert!(detect_dist_tag_anomaly(&p, "2.0.0").is_none());
+        // Same shape, user has pinned beyond the published max.
+        let p = pkmt_with_dist_tags(&["1.3.8", "2.0.0"], &[("latest", "1.3.8")]);
+        assert!(detect_dist_tag_anomaly(&p, "2.1.0").is_none());
+    }
+
+    /// `@expo/cli@54.0.24` while Expo SDK 55 is `latest` and SDK 56
+    /// is published: the user has explicitly stepped off the `latest`
+    /// train onto an older major, so the tag drift is information
+    /// about an ecosystem they're not on. Suppress.
+    #[test]
+    fn dist_tag_anomaly_quiet_when_user_pinned_below_latest_major() {
+        let p = pkmt_with_dist_tags(&["54.0.24", "55.0.30", "56.1.4"], &[("latest", "55.0.30")]);
+        assert!(detect_dist_tag_anomaly(&p, "54.0.24").is_none());
+    }
+
+    /// Defence in depth — unparseable dep version falls back to the
+    /// structural check rather than silently suppressing.
+    #[test]
+    fn dist_tag_anomaly_unparseable_dep_version_falls_back_to_structural_check() {
+        let p = pkmt_with_dist_tags(&["1.0.0", "1.1.0", "2.0.0"], &[("latest", "1.1.0")]);
+        assert!(detect_dist_tag_anomaly(&p, "not-a-version").is_some());
     }
 
     /// Lockfiles occasionally record dependency versions with a

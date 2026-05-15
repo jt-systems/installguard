@@ -28,6 +28,40 @@ belongs in `scan` or `ci`. Closes the "scan flagged this — *why*?"
 loop without requiring operators to dig through audit logs or
 re-run with `RUST_LOG=debug`.
 
+`dist-tag-anomaly` heuristic tightened with three new
+suppressions, all driven by false positives observed on real
+production lockfiles. (1) **Sentinel filter**: versions with
+`major >= 999` are dropped from the `highest_published`
+candidate set. The motivating case is `react-native`, which
+publishes `1000.0.0` precisely to break `npm install
+react-native@latest`; treating it as the highest produced a
+guaranteed false positive for every RN lockfile. (2)
+**User-bypass at-or-past max**: if the resolved dep version is
+itself `>= highest_published`, the operator has pinned past
+`latest` deliberately (e.g. `accepts@2.0.0` while `latest=1.3.8`
+during a cautious 2.x rollout) and the tag drift is irrelevant
+to *their* install. (3) **User-bypass below latest major**: if
+the resolved dep version is on a major *older* than `latest`,
+the operator has explicitly stepped off the `latest` train
+(e.g. `@expo/cli@54.0.24` while Expo SDK 55 is `latest` and SDK
+56 is published) — the tag drift is information about an
+ecosystem they're not on. The structural cross-major case
+(`latest.major < highest.major`, both within the user's major)
+remains the high-precision pattern we still surface.
+
+Default `scripts.allow` gains `core-js` and `protobufjs`. Both
+are the postinstall-runs-helper-script pattern (same shape as
+`esbuild`, `playwright`, `supabase`): the script genuinely needs
+to run for the package to function (`core-js` prints its sponsor
+banner; `protobufjs` rebuilds its bundled gRPC descriptors), and
+both packages satisfy the existing inclusion criteria — tens of
+millions of weekly downloads each, single well-understood
+install purpose, no historical takeover advisory tied to the
+install script. Defaults remain a curated list, not a
+free-for-all: operators wanting different behaviour set
+`scripts.allow: []` to opt out, or list specific packages to
+override.
+
 ## [0.1.12] — 2026-05-14
 
 New `installguard doctor` subcommand. Runs the same evaluation

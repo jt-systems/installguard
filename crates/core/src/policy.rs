@@ -808,6 +808,7 @@ impl Policy {
 /// future additions blindly".
 const DEFAULT_SCRIPT_ALLOWLIST: &[&str] = &[
     "bcrypt",
+    "core-js",
     "cypress",
     "electron",
     "esbuild",
@@ -816,6 +817,7 @@ const DEFAULT_SCRIPT_ALLOWLIST: &[&str] = &[
     "node-gyp",
     "node-pre-gyp",
     "playwright",
+    "protobufjs",
     "puppeteer",
     "sharp",
     "supabase",
@@ -997,11 +999,13 @@ mod tests {
             scripts: vec!["postinstall".into()],
         });
         for name in [
+            "core-js",
+            "cypress",
             "esbuild",
             "fsevents",
             "msw",
-            "cypress",
             "playwright",
+            "protobufjs",
             "supabase",
         ] {
             let d = p.evaluate(
