@@ -47,9 +47,7 @@ impl LockfileAdapter for YarnAdapter {
         let raw = std::fs::read_to_string(path)?;
         let direct = path
             .parent()
-            .map(|p| p.join("package.json"))
-            .and_then(|p| std::fs::read_to_string(&p).ok())
-            .map(|s| collect_direct_specs(&s))
+            .map(collect_workspace_direct_specs)
             .unwrap_or_default();
         parse_str(&raw, &direct)
     }
@@ -257,6 +255,118 @@ pub fn collect_direct_specs(package_json: &str) -> BTreeSet<DirectSpec> {
     out
 }
 
+/// Read the root `package.json` at `root_dir/package.json` and union
+/// its direct deps with those of every workspace member declared in
+/// the `workspaces` field. Yarn supports two shapes:
+///
+/// * `"workspaces": ["packages/*", "apps/web"]` — array of patterns.
+/// * `"workspaces": { "packages": [...] }` — object form (Yarn 1
+///   nohoist compatibility shape, still accepted by Berry).
+///
+/// Each pattern is resolved against `root_dir`. We support the two
+/// shapes seen in real-world workspaces:
+///
+/// * literal segment (`packages/web`) — read that one directory's
+///   `package.json` directly,
+/// * trailing single-star (`packages/*`) — list the parent directory
+///   and read every immediate-child `package.json` it contains.
+///
+/// More exotic globs (`**`, character classes) are deliberately not
+/// supported; they're vanishingly rare in `workspaces` arrays. A
+/// member `package.json` that fails to read or parse is silently
+/// skipped (consistent with the rest of this adapter — direct-dep
+/// detection is a best-effort enrichment, never load-bearing for
+/// correctness).
+///
+/// If the root `package.json` is missing or cannot be parsed, the
+/// caller still gets an empty set (the prior behaviour) — it just
+/// means no entries get marked direct.
+pub fn collect_workspace_direct_specs(root_dir: &Path) -> BTreeSet<DirectSpec> {
+    let mut out = BTreeSet::new();
+    let root_pj_path = root_dir.join("package.json");
+    let Ok(root_raw) = std::fs::read_to_string(&root_pj_path) else {
+        return out;
+    };
+    out.extend(collect_direct_specs(&root_raw));
+
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&root_raw) else {
+        return out;
+    };
+    let patterns = workspace_patterns(&value);
+    for pattern in patterns {
+        for member_pj in expand_workspace_pattern(root_dir, &pattern) {
+            if let Ok(raw) = std::fs::read_to_string(&member_pj) {
+                out.extend(collect_direct_specs(&raw));
+            }
+        }
+    }
+    out
+}
+
+/// Extract the workspace pattern array from either the bare-array
+/// (`"workspaces": [...]`) or the object form
+/// (`"workspaces": { "packages": [...] }`). Yarn Berry accepts both.
+fn workspace_patterns(value: &serde_json::Value) -> Vec<String> {
+    let Some(ws) = value.get("workspaces") else {
+        return Vec::new();
+    };
+    let arr = ws
+        .as_array()
+        .or_else(|| ws.get("packages").and_then(|v| v.as_array()));
+    let Some(arr) = arr else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect()
+}
+
+/// Resolve a workspace pattern to the set of `<member>/package.json`
+/// paths it matches under `root_dir`. Supports literal paths and a
+/// trailing `/*` glob. Other glob shapes are returned as the empty
+/// set (i.e. silently skipped — see [`collect_workspace_direct_specs`]).
+fn expand_workspace_pattern(root_dir: &Path, pattern: &str) -> Vec<std::path::PathBuf> {
+    let pattern = pattern.trim_matches('/');
+    if pattern.is_empty() || pattern.contains("**") {
+        return Vec::new();
+    }
+
+    if let Some(parent) = pattern.strip_suffix("/*") {
+        // Trailing single-star: list immediate children of `parent`.
+        if parent.contains('*') {
+            return Vec::new();
+        }
+        let dir = root_dir.join(parent);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let pj = path.join("package.json");
+                if pj.is_file() {
+                    out.push(pj);
+                }
+            }
+        }
+        return out;
+    }
+
+    if pattern.contains('*') {
+        // Mid-string glob — not supported.
+        return Vec::new();
+    }
+
+    // Literal path.
+    let pj = root_dir.join(pattern).join("package.json");
+    if pj.is_file() {
+        vec![pj]
+    } else {
+        Vec::new()
+    }
+}
+
 // ── Berry yarn.lock schema (subset) ────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -394,5 +504,86 @@ __metadata:
         let s = collect_direct_specs(pj);
         let names: Vec<&str> = s.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, vec!["a", "b", "c", "d"]);
+    }
+
+    /// End-to-end workspace fixture: root has two members under
+    /// `packages/*` plus an explicitly-named `apps/web`. Each member
+    /// declares its own direct deps. Verify the union surfaces every
+    /// member's deps as direct.
+    #[test]
+    fn collect_workspace_direct_specs_walks_members() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!(
+            "ig-yarn-ws-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(tmp.join("packages/a")).unwrap();
+        fs::create_dir_all(tmp.join("packages/b")).unwrap();
+        fs::create_dir_all(tmp.join("apps/web")).unwrap();
+        fs::write(
+            tmp.join("package.json"),
+            r#"{
+              "name": "root",
+              "private": true,
+              "workspaces": ["packages/*", "apps/web"],
+              "devDependencies": { "root-dev": "^1.0.0" }
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            tmp.join("packages/a/package.json"),
+            r#"{ "name": "a", "dependencies": { "left-pad": "^1.3.0" } }"#,
+        )
+        .unwrap();
+        fs::write(
+            tmp.join("packages/b/package.json"),
+            r#"{ "name": "b", "dependencies": { "right-pad": "^2.0.0" } }"#,
+        )
+        .unwrap();
+        fs::write(
+            tmp.join("apps/web/package.json"),
+            r#"{ "name": "web", "dependencies": { "react": "^18" } }"#,
+        )
+        .unwrap();
+
+        let specs = collect_workspace_direct_specs(&tmp);
+        let names: Vec<&str> = specs.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, vec!["left-pad", "react", "right-pad", "root-dev"]);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Object-shaped `workspaces: { packages: [...] }` is the Yarn 1
+    /// nohoist compatibility form. Berry still accepts it.
+    #[test]
+    fn workspace_object_shape_supported() {
+        use std::fs;
+        let tmp = std::env::temp_dir().join(format!(
+            "ig-yarn-wsobj-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(tmp.join("pkgs/x")).unwrap();
+        fs::write(
+            tmp.join("package.json"),
+            r#"{ "workspaces": { "packages": ["pkgs/*"] } }"#,
+        )
+        .unwrap();
+        fs::write(
+            tmp.join("pkgs/x/package.json"),
+            r#"{ "dependencies": { "lodash": "^4" } }"#,
+        )
+        .unwrap();
+        let specs = collect_workspace_direct_specs(&tmp);
+        assert_eq!(
+            specs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+            vec!["lodash"]
+        );
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

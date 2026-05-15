@@ -11,6 +11,44 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.2.8] — 2026-05-15
+
+**Yarn workspace member `package.json` files are now walked for
+direct-dep detection.** The Yarn Berry adapter previously only
+read the root `package.json` to populate the direct-dep set. In
+a typical monorepo the root has only `devDependencies` (or is
+entirely empty under `private: true` with everything declared in
+`packages/*/package.json`); every member dep was therefore
+demoted to "transitive" and any `directOnly` policy rule
+silently no-op'd against them.
+
+The adapter now reads the root `package.json`'s `workspaces`
+field (both shapes — bare array `["packages/*", "apps/web"]` and
+the Yarn-1 nohoist-compatibility object form
+`{ "packages": [...] }`), expands each pattern under the
+lockfile's parent directory, and unions the direct-dep specs
+across the root and every member it finds. Two glob shapes are
+supported, covering the overwhelming majority of real
+workspaces:
+
+* literal segments (`packages/web`) — read that one `package.json`
+  directly,
+* trailing single-star (`packages/*`) — list the parent dir and
+  read each immediate-child `package.json`.
+
+`**` and other exotic globs are deliberately not supported (they
+are vanishingly rare in `workspaces` arrays). A member
+`package.json` that fails to read or parse is silently skipped,
+matching the rest of this adapter's "best-effort enrichment,
+never load-bearing for correctness" stance.
+
+`installguard-adapter-pnpm` and `installguard-adapter-npm` are
+unaffected: pnpm's `pnpm-lock.yaml` records the workspace member
+graph in its `importers` map (already handled), and npm's
+`package-lock.json` v3 stores the workspace tree under
+`packages` (also already handled). This release brings yarn to
+parity.
+
 ## [0.2.7] — 2026-05-15
 
 **purl is now ecosystem-aware, and the lock format records each
