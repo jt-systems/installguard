@@ -780,8 +780,12 @@ fn source_from_kind(kind: &str) -> installguard_core::dependency::Source {
         "file" => Source::File {
             path: String::new(),
         },
+        "pypi" => Source::Pypi { url: String::new() },
         // Default to Registry for unknown source kinds; the lock has
-        // already been verified by digest so this is safe.
+        // already been verified by digest so this is safe. Unknown
+        // values can only appear when an older binary reads a lock
+        // written by a newer one — the schema-version gate in
+        // `InstallguardLock::from_json` keeps that bounded.
         _ => Source::Registry { url: String::new() },
     }
 }

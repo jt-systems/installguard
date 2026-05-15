@@ -70,32 +70,81 @@ impl ScorecardProvider {
         })
     }
 
-    async fn fetch_npm_repo_url(&self, name: &str) -> Option<String> {
+    /// Looks up the npm packument and extracts a `repository` URL,
+    /// if one is recorded.
+    ///
+    /// * `Ok(Some(url))` — packument fetched, `repository` field
+    ///   present.
+    /// * `Ok(None)` — packument fetched (2xx), but no `repository`
+    ///   recorded (legitimate absence — the package simply doesn't
+    ///   declare one). Also returned on 404 (package not on this
+    ///   registry mirror).
+    /// * `Err(reason)` — transport failure, 5xx, or decode error.
+    ///   Caller surfaces as `Signal::Unavailable` so an outage on
+    ///   the registry doesn't masquerade as "no Scorecard signal"
+    ///   on a clean run when the user has disabled the dedicated
+    ///   `npm-registry` provider.
+    async fn fetch_npm_repo_url(&self, name: &str) -> Result<Option<String>, String> {
         let url = format!("{}/{}", self.npm_base, encode_npm_name(name));
         tracing::debug!(url, "fetching npm packument for repo discovery");
-        let resp = self.client.get(&url).send().await.ok()?;
-        if !resp.status().is_success() {
-            return None;
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("npm packument request failed: {e}"))?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
         }
-        let pkg: NpmPackument = resp.json().await.ok()?;
-        pkg.repository.and_then(|r| match r {
+        if !status.is_success() {
+            return Err(format!("npm packument HTTP {status}"));
+        }
+        let pkg: NpmPackument = resp
+            .json()
+            .await
+            .map_err(|e| format!("npm packument decode failed: {e}"))?;
+        Ok(pkg.repository.and_then(|r| match r {
             RepoField::Url(u) => Some(u),
             RepoField::Object { url } => url,
-        })
+        }))
     }
 
-    async fn fetch_pypi_repo_url(&self, name: &str, version: &str) -> Option<String> {
+    /// Looks up the PyPI per-version metadata and extracts a
+    /// project URL pointing at a recognised source host.
+    ///
+    /// Same semantics as [`Self::fetch_npm_repo_url`]:
+    /// `Ok(Some)` = found, `Ok(None)` = legitimate absence (or
+    /// 404 from the index), `Err` = transport / decode failure
+    /// the caller must surface.
+    async fn fetch_pypi_repo_url(
+        &self,
+        name: &str,
+        version: &str,
+    ) -> Result<Option<String>, String> {
         // PyPI is case- and separator-insensitive (PEP 503); the
         // adapter normalises the name before any provider sees it,
         // so the path is safe verbatim.
         let url = format!("{}/{}/{}/json", self.pypi_base, name, version);
         tracing::debug!(url, "fetching pypi metadata for repo discovery");
-        let resp = self.client.get(&url).send().await.ok()?;
-        if !resp.status().is_success() {
-            return None;
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("pypi metadata request failed: {e}"))?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
         }
-        let body: PypiResponse = resp.json().await.ok()?;
-        pick_pypi_repo_url(&body.info)
+        if !status.is_success() {
+            return Err(format!("pypi metadata HTTP {status}"));
+        }
+        let body: PypiResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("pypi metadata decode failed: {e}"))?;
+        Ok(pick_pypi_repo_url(&body.info))
     }
 
     /// Fetch the OpenSSF Scorecard for a `host/owner/repo` triple.
@@ -164,13 +213,28 @@ impl SignalProvider for ScorecardProvider {
             }
             Ecosystem::Pypi => self.fetch_pypi_repo_url(&dep.name, &dep.version).await,
         };
-        // Repo discovery is best-effort — silent on absence so we
-        // don't double-count packument / metadata fetcher failures
-        // already surfaced by the npm-registry / pypi-registry
-        // providers. The load-bearing failure mode is the
-        // Scorecard service itself, which we surface below.
-        let Some(repo_url) = repo_url else {
-            return Ok(Vec::new());
+        // Repo discovery has three outcomes we treat distinctly:
+        //
+        // * `Ok(Some)` — got a URL; proceed to extract a triple
+        //   and query Scorecard.
+        // * `Ok(None)` — packument fetched, no `repository` field
+        //   recorded (or 404 for the package). Legitimate absence;
+        //   stay silent so this doesn't fire a false "unavailable"
+        //   on every npm package without a `repository` entry.
+        // * `Err` — transport / decode failure on the discovery
+        //   fetch itself. Surface as `Unavailable` so a registry
+        //   outage does not silently turn into "no Scorecard
+        //   signal" when the user has disabled the dedicated
+        //   `npm-registry` / `pypi-registry` providers.
+        let repo_url = match repo_url {
+            Ok(Some(u)) => u,
+            Ok(None) => return Ok(Vec::new()),
+            Err(reason) => {
+                return Ok(vec![Signal::Unavailable {
+                    provider: "openssf-scorecard".to_string(),
+                    reason: format!("repo discovery failed: {reason}"),
+                }])
+            }
         };
         let Some(triple) = extract_repo_triple(&repo_url) else {
             return Ok(Vec::new());

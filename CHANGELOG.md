@@ -11,6 +11,50 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-05-15
+
+Three small correctness fixes shipped together — none change a single
+verdict on existing fixtures, but each closes a "silent in the wrong
+direction" hole.
+
+### Fixed
+
+* **`--frozen` replay no longer loses the PyPI source kind.** The lock
+  format records `source: "pypi"` since 0.2.7, but the CLI's
+  `source_from_kind()` lookup table was missing the `pypi` arm and
+  collapsed it back to `Source::Registry` on rebuild. Decisions were
+  unaffected (the policy gates that consume `source` treat both as
+  non-exotic), but JSON / explain output mis-attributed PyPI deps as
+  generic registry entries when reading a v2 lock. Added the `pypi`
+  arm and noted the bounded scope of the fall-through default.
+
+* **Scorecard repo discovery no longer fails open.** `fetch_npm_repo_url`
+  and `fetch_pypi_repo_url` collapsed every transport / decode failure
+  to `None`, indistinguishable from "package legitimately has no
+  `repository` field". `signals()` then returned an empty vec, hiding
+  the outage. They now return `Result<Option<String>, String>`:
+  `Ok(Some)` = found, `Ok(None)` = legitimate absence (or 404),
+  `Err` = transport / decode failure surfaced as
+  `Signal::Unavailable`. In default setups the dedicated `npm-registry`
+  / `pypi-registry` providers already raised the alarm; this matters
+  for users who disable those providers and rely on Scorecard alone.
+
+### Documentation
+
+* **`requireProvenance` honesty pass extended to user-facing docs.**
+  The 0.2.6 cleanup removed the "verified" overclaim from code
+  comments and the `ProvenanceMissing` reason text, but a few
+  user-facing surfaces still implied DSSE/Rekor verification we
+  don't actually perform. Updated `policy-yaml.md` (the
+  `requireProvenance` row now spells out the structural check
+  and links M9 for the verified upgrade) and `whitepaper.md`
+  §6.5 (the trust-score factor list now reads "presence of
+  provenance attestations (claimed today; cryptographic
+  verification … tracked under M9)" and the closing line
+  matches). `whitepaper.md` §13 and `DESIGN.md` §2 are now
+  accurate as of 0.3.0 — release-binary signing and SLSA L3
+  provenance shipped, so no edits needed there.
+
 ## [0.3.0] — 2026-05-15
 
 **Release-binary signing and SLSA Build Level 3 provenance.** The

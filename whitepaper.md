@@ -281,13 +281,13 @@ Dependency trust matures over time and across signals. InstallGuard computes a p
 - dist-tag age
 - maintainer-set stability vs prior versions
 - maintainer account age and 2FA enforcement
-- presence and verification of provenance attestations
+- presence of provenance attestations (claimed today; cryptographic verification against a pinned Sigstore Fulcio root tracked under ROADMAP M9)
 - historical release cadence (regular vs anomalous)
 - file-set delta (new scripts, new binaries, new network-capable code)
 - OpenSSF Scorecard signals (where available)
 - deprecation / unpublish history
 
-A package published five minutes ago by a recently rotated maintainer with new install scripts does not carry the same trust as a version with years of stable maintenance, consistent cadence, and verified provenance.
+A package published five minutes ago by a recently rotated maintainer with new install scripts does not carry the same trust as a version with years of stable maintenance, consistent cadence, and a publisher provenance claim.
 
 > Trust matures; it is not an instant property of a version number.
 
