@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "installguard"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "anyhow",
  "chrono",
@@ -907,7 +907,7 @@ dependencies = [
 
 [[package]]
 name = "installguard-adapter-npm"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "installguard-core",
  "serde",
@@ -917,7 +917,7 @@ dependencies = [
 
 [[package]]
 name = "installguard-adapter-pnpm"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "installguard-core",
  "serde",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "installguard-adapter-yarn"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "installguard-core",
  "serde",
@@ -937,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "installguard-cache"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "async-trait",
  "chrono",
@@ -953,7 +953,7 @@ dependencies = [
 
 [[package]]
 name = "installguard-core"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "async-trait",
  "base64",
@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "installguard-signal-depsdev"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "async-trait",
  "installguard-core",
@@ -987,7 +987,7 @@ dependencies = [
 
 [[package]]
 name = "installguard-signal-npm-registry"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "async-trait",
  "base64",
@@ -1005,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "installguard-signal-osv"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "async-trait",
  "installguard-core",
@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "installguard-signal-scorecard"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "async-trait",
  "installguard-core",

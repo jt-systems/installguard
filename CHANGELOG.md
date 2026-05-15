@@ -11,6 +11,30 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.19] — 2026-05-15
+
+Documentation catch-up release. No binary changes.
+
+The Usage section of <https://installguard.dev> grew from 9 to 18
+pages, covering every subcommand that ships in the binary.
+Previously undocumented and now landed:
+
+* `cache` — inspect & manage the on-disk signal cache (new in 0.1.17).
+* `schema` — print the policy JSON Schema for editor integration.
+* `lock` — deterministic policy-evaluation snapshot.
+* `verify` — re-evaluate and check against a lock or signed bundle
+  (online, frozen, or signature-verifying modes).
+* `attest` — unsigned in-toto v1 statement wrapping the verdict.
+* `sbom` — CycloneDX 1.5 SBOM with `installguard:*` decision
+  properties per component.
+* `vex` — OpenVEX 0.2.0 mapping decisions to VEX statements.
+* `key` — generate Sigstore-compatible Ed25519 keypairs.
+* `sign` — DSSE v1 envelope cosign can verify.
+
+The attestation chain (`lock` → `attest` → `sign` →
+`verify --bundle`) is cross-linked end-to-end so the SLSA L3 /
+cosign story is finally walkable from the docs alone.
+
 ## [0.1.18] — 2026-05-15
 
 Documentation & examples release. No binary changes; same gate, more
