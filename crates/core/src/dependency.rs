@@ -24,9 +24,181 @@ impl Ecosystem {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Registry family — a coarser grouping than [`Ecosystem`] used by
+/// policy matchers. Multiple package managers (e.g. `npm`, `pnpm`,
+/// `yarn`) consume the same registry family and therefore share
+/// allowlists.
+///
+/// `Pypi` is reserved for the PyPI adapter (see ROADMAP M8); its
+/// presence here lets policy authors write forward-compatible
+/// `pypi:...` entries today even though no PyPI adapter is shipped
+/// yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum RegistryFamily {
     Npm,
+    /// Reserved for the PyPI adapter (ROADMAP M8). Parses in policy
+    /// matchers today; no adapter ships against it yet.
+    Pypi,
+}
+
+impl RegistryFamily {
+    /// Stable lowercase token used as the YAML / JSON prefix in
+    /// [`EcosystemMatcher`] (`npm:lodash`, `pypi:requests`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Npm => "npm",
+            Self::Pypi => "pypi",
+        }
+    }
+}
+
+impl std::str::FromStr for RegistryFamily {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "npm" => Ok(Self::Npm),
+            "pypi" => Ok(Self::Pypi),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Package selector used in policy allowlists (`scripts.allow`,
+/// `defaults.nameSquatAllow`).
+///
+/// Accepts an optional `family:` prefix:
+///
+/// * Bare `lodash` — matches any registry family. This is the default
+///   for back-compat with v1 policies and the right shape for
+///   single-ecosystem projects.
+/// * Prefixed `npm:lodash` — matches only deps in the `npm` family
+///   (i.e. resolved by `npm`, `pnpm`, or `yarn`).
+/// * Prefixed `pypi:requests` — matches only PyPI deps. Parses today;
+///   takes effect when the PyPI adapter ships (ROADMAP M8).
+///
+/// Scoped npm names (`@scope/name`, `npm:@scope/name`) are accepted
+/// in both forms.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EcosystemMatcher {
+    /// `Some(family)` restricts the match to a single registry
+    /// family; `None` matches any family (back-compat).
+    pub family: Option<RegistryFamily>,
+    /// Exact package name (no version). Compared verbatim.
+    pub name: String,
+}
+
+impl EcosystemMatcher {
+    /// Construct a bare (family-agnostic) matcher.
+    #[must_use]
+    pub fn bare(name: impl Into<String>) -> Self {
+        Self {
+            family: None,
+            name: name.into(),
+        }
+    }
+
+    /// Construct a family-scoped matcher.
+    #[must_use]
+    pub fn scoped(family: RegistryFamily, name: impl Into<String>) -> Self {
+        Self {
+            family: Some(family),
+            name: name.into(),
+        }
+    }
+
+    /// True when the matcher applies to a `(family, name)` pair.
+    /// Bare matchers ignore the family.
+    #[must_use]
+    pub fn matches(&self, family: RegistryFamily, name: &str) -> bool {
+        self.name == name && self.family.is_none_or(|f| f == family)
+    }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum EcosystemMatcherParseError {
+    #[error("empty matcher")]
+    Empty,
+    #[error("unknown registry family `{family}` in `{full}`; valid: npm, pypi")]
+    UnknownFamily { family: String, full: String },
+    #[error("missing package name after `{family}:`")]
+    MissingName { family: String },
+}
+
+impl std::str::FromStr for EcosystemMatcher {
+    type Err = EcosystemMatcherParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err(EcosystemMatcherParseError::Empty);
+        }
+        // Look for a `family:` prefix in the segment *before* any `/`.
+        // Scoped npm names like `@scope/name` carry no colon in the
+        // scope segment, so the only colon we care about is one that
+        // sits before the first slash (or in the whole string when
+        // there's no slash).
+        let head_end = s.find('/').unwrap_or(s.len());
+        let head = &s[..head_end];
+        let Some((family_str, _)) = head.split_once(':') else {
+            return Ok(Self::bare(s));
+        };
+        let after = &s[family_str.len() + 1..];
+        if after.is_empty() {
+            return Err(EcosystemMatcherParseError::MissingName {
+                family: family_str.to_string(),
+            });
+        }
+        let family = family_str.parse::<RegistryFamily>().map_err(|()| {
+            EcosystemMatcherParseError::UnknownFamily {
+                family: family_str.to_string(),
+                full: s.to_string(),
+            }
+        })?;
+        Ok(Self::scoped(family, after))
+    }
+}
+
+impl std::fmt::Display for EcosystemMatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.family {
+            Some(family) => write!(f, "{}:{}", family.as_str(), self.name),
+            None => f.write_str(&self.name),
+        }
+    }
+}
+
+impl Serialize for EcosystemMatcher {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        ser.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for EcosystemMatcher {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(de)?;
+        raw.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl schemars::JsonSchema for EcosystemMatcher {
+    fn schema_name() -> String {
+        "EcosystemMatcher".to_string()
+    }
+
+    fn json_schema(_gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        let mut schema = schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::InstanceType::String.into()),
+            ..Default::default()
+        };
+        schema.metadata().description = Some(
+            "Package selector. Bare name (`lodash`) matches any registry family; \
+             prefixed name (`npm:lodash`, `pypi:requests`) matches only that family. \
+             Scoped npm names (`@scope/name`) are accepted in both forms."
+                .into(),
+        );
+        schema.into()
+    }
 }
 
 /// Subresource integrity, as recorded in lockfiles.
@@ -92,11 +264,96 @@ impl ResolvedDependency {
     pub fn key(&self) -> String {
         format!(
             "{}/{}@{}",
-            match self.ecosystem {
-                Ecosystem::Npm | Ecosystem::Pnpm | Ecosystem::Yarn => "npm",
-            },
+            self.ecosystem.registry_family().as_str(),
             self.name,
             self.version
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_bare_matcher_keeps_name_and_no_family() {
+        let m: EcosystemMatcher = "lodash".parse().unwrap();
+        assert_eq!(m, EcosystemMatcher::bare("lodash"));
+        assert_eq!(m.to_string(), "lodash");
+    }
+
+    #[test]
+    fn parse_npm_prefix_scopes_to_npm_family() {
+        let m: EcosystemMatcher = "npm:lodash".parse().unwrap();
+        assert_eq!(m, EcosystemMatcher::scoped(RegistryFamily::Npm, "lodash"));
+        assert_eq!(m.to_string(), "npm:lodash");
+    }
+
+    #[test]
+    fn parse_pypi_prefix_scopes_to_pypi_family() {
+        let m: EcosystemMatcher = "pypi:requests".parse().unwrap();
+        assert_eq!(
+            m,
+            EcosystemMatcher::scoped(RegistryFamily::Pypi, "requests")
+        );
+    }
+
+    #[test]
+    fn parse_scoped_npm_name_is_treated_as_bare() {
+        let m: EcosystemMatcher = "@scope/pkg".parse().unwrap();
+        assert_eq!(m, EcosystemMatcher::bare("@scope/pkg"));
+    }
+
+    #[test]
+    fn parse_npm_prefix_with_scoped_name() {
+        let m: EcosystemMatcher = "npm:@scope/pkg".parse().unwrap();
+        assert_eq!(
+            m,
+            EcosystemMatcher::scoped(RegistryFamily::Npm, "@scope/pkg")
+        );
+    }
+
+    #[test]
+    fn parse_unknown_family_is_error() {
+        let err = "pypy:lodash".parse::<EcosystemMatcher>().unwrap_err();
+        assert!(matches!(
+            err,
+            EcosystemMatcherParseError::UnknownFamily { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_empty_is_error() {
+        let err = "".parse::<EcosystemMatcher>().unwrap_err();
+        assert_eq!(err, EcosystemMatcherParseError::Empty);
+    }
+
+    #[test]
+    fn bare_matcher_matches_any_family() {
+        let m = EcosystemMatcher::bare("lodash");
+        assert!(m.matches(RegistryFamily::Npm, "lodash"));
+        assert!(m.matches(RegistryFamily::Pypi, "lodash"));
+        assert!(!m.matches(RegistryFamily::Npm, "axios"));
+    }
+
+    #[test]
+    fn scoped_matcher_only_matches_its_family() {
+        let m = EcosystemMatcher::scoped(RegistryFamily::Npm, "lodash");
+        assert!(m.matches(RegistryFamily::Npm, "lodash"));
+        assert!(!m.matches(RegistryFamily::Pypi, "lodash"));
+    }
+
+    #[test]
+    fn key_uses_registry_family_prefix() {
+        let dep = ResolvedDependency {
+            ecosystem: Ecosystem::Yarn,
+            name: "lodash".into(),
+            version: "1.0.0".into(),
+            integrity: None,
+            source: Source::Registry { url: "x".into() },
+            direct: true,
+            requested_by: vec![],
+        };
+        assert_eq!(dep.key(), "npm/lodash@1.0.0");
     }
 }

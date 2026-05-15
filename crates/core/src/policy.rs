@@ -13,7 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::decision::{Decision, Reason, Severity};
-use crate::dependency::ResolvedDependency;
+use crate::dependency::{EcosystemMatcher, RegistryFamily, ResolvedDependency};
 use crate::signal::SignalSet;
 
 /// Per-evaluation context carried alongside `Policy` and the dependency
@@ -139,8 +139,12 @@ pub struct Defaults {
     /// sit close to a popular one (e.g. `gaxios` — Google's
     /// official HTTP client — against `axios`). Add the exact
     /// package name (no version) to suppress the finding.
+    ///
+    /// Entries accept the [`EcosystemMatcher`] grammar: bare
+    /// `gaxios` matches any registry family (back-compat); prefixed
+    /// `npm:gaxios` scopes the allow to npm-family packages only.
     #[serde(default)]
-    pub name_squat_allow: Vec<String>,
+    pub name_squat_allow: Vec<EcosystemMatcher>,
     /// When `true`, dependencies whose project-metadata signal
     /// reports the upstream project as archived fire
     /// [`Reason::ProjectArchived`]. Off by default; common in
@@ -236,8 +240,12 @@ pub struct DirectOverrides {
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct Scripts {
     pub policy: ScriptPolicy,
+    /// User allowlist of packages whose lifecycle scripts may run.
+    /// Entries accept the [`EcosystemMatcher`] grammar — bare
+    /// `my-pkg` matches any registry family; `npm:my-pkg` scopes to
+    /// npm-family only.
     #[serde(default)]
-    pub allow: Vec<String>,
+    pub allow: Vec<EcosystemMatcher>,
 }
 
 impl Default for Scripts {
@@ -373,7 +381,7 @@ impl Policy {
         // ── Lifecycle scripts ───────────────────────────────────────────
         if let Some(scripts) = signals.lifecycle_scripts() {
             for script in scripts {
-                if !self.script_allowed(&dep.name, script) {
+                if !self.script_allowed(dep, script) {
                     if ctx.ignore_scripts {
                         reasons.push(Reason::LifecycleScriptIgnored {
                             script: script.clone(),
@@ -460,11 +468,12 @@ impl Policy {
         // (e.g. `gaxios` is Google's official HTTP client and not a
         // typosquat of `axios`, despite a Levenshtein distance of 1).
         if let Some((style, target)) = signals.name_squat() {
+            let dep_family = dep.ecosystem.registry_family();
             if !self
                 .defaults
                 .name_squat_allow
                 .iter()
-                .any(|n| n == &dep.name)
+                .any(|m| m.matches(dep_family, &dep.name))
             {
                 reasons.push(Reason::NameSquat {
                     style: style.to_string(),
@@ -769,12 +778,24 @@ impl Policy {
         }
     }
 
-    fn script_allowed(&self, package: &str, _script: &str) -> bool {
+    fn script_allowed(&self, dep: &ResolvedDependency, _script: &str) -> bool {
         match self.scripts.policy {
             ScriptPolicy::AllowByDefault => true,
             ScriptPolicy::DenyByDefault => {
-                DEFAULT_SCRIPT_ALLOWLIST.binary_search(&package).is_ok()
-                    || self.scripts.allow.iter().any(|p| p == package)
+                let family = dep.ecosystem.registry_family();
+                let package = dep.name.as_str();
+                // Curated default list is npm-only — packages on it
+                // are well-known npm-ecosystem natives. Other families
+                // get their own curated lists when their adapters land.
+                if family == RegistryFamily::Npm
+                    && DEFAULT_SCRIPT_ALLOWLIST.binary_search(&package).is_ok()
+                {
+                    return true;
+                }
+                self.scripts
+                    .allow
+                    .iter()
+                    .any(|m| m.matches(family, package))
             }
         }
     }
@@ -1704,6 +1725,96 @@ mod tests {
             Utc::now(),
         );
         assert!(matches!(d, Decision::Block { .. }), "got {d:?}");
+    }
+
+    /// Ecosystem-prefix grammar: `npm:gaxios` must scope the allow to
+    /// the npm registry family. Today every dep is npm-family, so this
+    /// is functionally equivalent to a bare entry — but the parse and
+    /// matching path is exercised so PyPI (Slice 2+) inherits a
+    /// known-good shape.
+    #[test]
+    fn name_squat_allowlist_accepts_ecosystem_prefix() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\ndefaults:\n  nameSquatAllow: [\"npm:gaxios\"]\n")
+                .unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::NameSquat {
+            style: "typo".into(),
+            target: "axios".into(),
+        });
+        let d = p.evaluate(
+            &dep("gaxios", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Allow), "got {d:?}");
+    }
+
+    /// A `pypi:` prefix parses cleanly today but matches nothing in the
+    /// npm-only world — proving the forward-compat shape works without
+    /// over-broadening current allow behaviour.
+    #[test]
+    fn pypi_prefix_does_not_match_npm_dep() {
+        let p =
+            Policy::from_yaml("policyVersion: 1\ndefaults:\n  nameSquatAllow: [\"pypi:gaxios\"]\n")
+                .unwrap();
+        let mut signals = SignalSet::default();
+        signals.push(Signal::NameSquat {
+            style: "typo".into(),
+            target: "axios".into(),
+        });
+        let d = p.evaluate(
+            &dep("gaxios", false, Source::Registry { url: "x".into() }),
+            &signals,
+            Utc::now(),
+        );
+        assert!(matches!(d, Decision::Block { .. }), "got {d:?}");
+    }
+
+    /// `scripts.allow` honours the same prefix grammar, including the
+    /// bare back-compat form and the `npm:` scoped form.
+    #[test]
+    fn scripts_allow_accepts_ecosystem_prefix() {
+        let p = Policy::from_yaml(
+            "policyVersion: 1\nscripts:\n  policy: deny-by-default\n  allow:\n    - my-pkg\n    - \"npm:other-pkg\"\n",
+        )
+        .unwrap();
+        let mut s_bare = SignalSet::default();
+        s_bare.push(Signal::LifecycleScripts {
+            scripts: vec!["postinstall".into()],
+        });
+        let d_bare = p.evaluate(
+            &dep("my-pkg", false, Source::Registry { url: "x".into() }),
+            &s_bare,
+            Utc::now(),
+        );
+        assert!(matches!(d_bare, Decision::Allow), "got {d_bare:?}");
+
+        let mut s_scoped = SignalSet::default();
+        s_scoped.push(Signal::LifecycleScripts {
+            scripts: vec!["postinstall".into()],
+        });
+        let d_scoped = p.evaluate(
+            &dep("other-pkg", false, Source::Registry { url: "x".into() }),
+            &s_scoped,
+            Utc::now(),
+        );
+        assert!(matches!(d_scoped, Decision::Allow), "got {d_scoped:?}");
+    }
+
+    /// Unknown family prefixes are a hard parse error — we'd rather a
+    /// typo'd `pypy:` fail loudly at policy load than silently allow
+    /// nothing.
+    #[test]
+    fn unknown_family_prefix_is_parse_error() {
+        let err =
+            Policy::from_yaml("policyVersion: 1\ndefaults:\n  nameSquatAllow: [\"pypy:gaxios\"]\n")
+                .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("pypy"),
+            "error did not mention bad family: {msg}"
+        );
     }
 
     #[test]

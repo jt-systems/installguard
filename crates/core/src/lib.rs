@@ -26,7 +26,10 @@ pub use adapter::LockfileAdapter;
 pub use attestation::{Statement, PREDICATE_TYPE, STATEMENT_TYPE};
 pub use composite::CompositeProvider;
 pub use decision::{Decision, Reason};
-pub use dependency::{Ecosystem, Integrity, ResolvedDependency, Source};
+pub use dependency::{
+    Ecosystem, EcosystemMatcher, EcosystemMatcherParseError, Integrity, RegistryFamily,
+    ResolvedDependency, Source,
+};
 pub use lockfile::{InstallguardLock, LockDecision, LockEntry, LockError, LockMismatch};
 pub use policy::{Policy, PolicyError, ScriptPolicy};
 pub use signal::{Signal, SignalProvider, SignalSet};

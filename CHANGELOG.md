@@ -11,6 +11,26 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.15] — 2026-05-15
+
+Policy allowlists now accept an optional `family:` ecosystem
+prefix. Bare entries (`gaxios`, `my-pkg`) keep working unchanged
+and match a package of that name in any registry family —
+preserving back-compat with every 0.1.x policy in the wild. New
+prefixed entries scope the allow to one family: `npm:lodash`
+matches only npm-family packages (npm/pnpm/yarn), and `pypi:requests`
+parses today as forward-compat for the PyPI adapter (ROADMAP M8).
+The grammar applies to `defaults.nameSquatAllow` and
+`scripts.allow`; scoped npm names (`@scope/name`,
+`npm:@scope/name`) are accepted in both forms. Unknown family
+prefixes (`pypy:lodash`) fail policy load loudly rather than
+silently allowing nothing.
+
+Internally the dependency cache key now derives from
+`Ecosystem::registry_family()` rather than a hardcoded `"npm"`
+literal — paving the way for a `pypi/<name>@<version>` namespace
+without further core changes when the PyPI adapter lands.
+
 ## [0.1.14] — 2026-05-15
 
 New `installguard simulate <candidate.yaml>` subcommand. Runs the

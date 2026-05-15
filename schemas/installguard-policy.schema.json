@@ -91,9 +91,9 @@
         },
         "nameSquatAllow": {
           "default": [],
-          "description": "Allowlist of package names (exact match) that should never fire [`Reason::NameSquat`]. The detector flags any name within Levenshtein-1 of the popular-name list, which catches genuine typosquats but also produces false positives for legitimate packages whose names happen to sit close to a popular one (e.g. `gaxios` — Google's official HTTP client — against `axios`). Add the exact package name (no version) to suppress the finding.",
+          "description": "Allowlist of package names (exact match) that should never fire [`Reason::NameSquat`]. The detector flags any name within Levenshtein-1 of the popular-name list, which catches genuine typosquats but also produces false positives for legitimate packages whose names happen to sit close to a popular one (e.g. `gaxios` — Google's official HTTP client — against `axios`). Add the exact package name (no version) to suppress the finding.\n\nEntries accept the [`EcosystemMatcher`] grammar: bare `gaxios` matches any registry family (back-compat); prefixed `npm:gaxios` scopes the allow to npm-family packages only.",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/EcosystemMatcher"
           },
           "type": "array"
         },
@@ -225,6 +225,10 @@
       },
       "type": "object"
     },
+    "EcosystemMatcher": {
+      "description": "Package selector. Bare name (`lodash`) matches any registry family; prefixed name (`npm:lodash`, `pypi:requests`) matches only that family. Scoped npm names (`@scope/name`) are accepted in both forms.",
+      "type": "string"
+    },
     "ScriptPolicy": {
       "enum": [
         "deny-by-default",
@@ -237,8 +241,9 @@
       "properties": {
         "allow": {
           "default": [],
+          "description": "User allowlist of packages whose lifecycle scripts may run. Entries accept the [`EcosystemMatcher`] grammar — bare `my-pkg` matches any registry family; `npm:my-pkg` scopes to npm-family only.",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/EcosystemMatcher"
           },
           "type": "array"
         },
