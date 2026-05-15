@@ -11,6 +11,32 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-05-15
+
+### Added
+
+* **One-level lockfile auto-discovery.** `installguard scan` (and
+  every other eval subcommand) used to error out as soon as no
+  recognised lockfile existed at `--path` (default: current
+  directory). Many Python projects keep `poetry.lock` / `uv.lock`
+  inside a named package subdir (`cpi_myca/poetry.lock`,
+  `backend/uv.lock`) while the git root is a thin shell of CI
+  config and READMEs. We now scan the immediate children when the
+  root has no lockfile and use the unique match, printing a
+  `note: using <relpath> (no lockfile at <root>)` line on stderr
+  so it's never invisible. Strictly one level deep — surprises
+  about which lockfile got picked are worse than a clear error.
+* `node_modules`, `.git`, `.venv`, `venv`, `target`, `dist`,
+  `build`, and any dotfile directory are skipped by the scan so
+  vendored / build-output lockfiles can't accidentally win.
+
+### Changed
+
+* The "no lockfile" error message now suggests `--path <dir>`
+  explicitly and, when multiple subdirs each contain a candidate
+  lockfile, lists them so you can pick one. InstallGuard does not
+  auto-merge across subprojects.
+
 ## [0.3.3] — 2026-05-15
 
 ### Fixed

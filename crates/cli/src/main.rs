@@ -833,11 +833,79 @@ fn locate_lockfile<'a>(
             return Ok((adapter.as_ref(), path));
         }
     }
-    Err(anyhow!(
-        "no supported lockfile found in {} (looked for {})",
-        root.display(),
-        candidates.join(", ")
-    ))
+
+    // Fall back to a *one-level* scan of immediate child directories.
+    // Many Python projects park their lockfile inside a named package
+    // dir (`backend/poetry.lock`, `cpi_myca/poetry.lock`) while the
+    // git repo root is a thin shell. We deliberately do not recurse
+    // — surprise about which lockfile got picked is worse than a
+    // clear error — and we only succeed when exactly one child
+    // contains a recognised lockfile, so monorepos still get the
+    // explicit-path error.
+    let mut hits: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let child = entry.path();
+            if !child.is_dir() {
+                continue;
+            }
+            // Skip dirs we'd never expect to host a project lockfile and
+            // which are *very* expensive to walk by accident.
+            if let Some(name) = child.file_name().and_then(|s| s.to_str()) {
+                if matches!(
+                    name,
+                    "node_modules" | ".git" | ".venv" | "venv" | "target" | "dist" | "build"
+                ) || name.starts_with('.')
+                {
+                    continue;
+                }
+            }
+            for name in candidates {
+                let path = child.join(name);
+                if path.exists() && adapters.iter().any(|a| a.detects(&path)) {
+                    hits.push(path);
+                    break;
+                }
+            }
+        }
+    }
+    if hits.len() == 1 {
+        let path = hits.into_iter().next().unwrap();
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        eprintln!("note: using {rel} (no lockfile at {})", root.display());
+        let adapter = adapters
+            .iter()
+            .find(|a| a.detects(&path))
+            .expect("detect already validated above")
+            .as_ref();
+        return Ok((adapter, path));
+    }
+
+    let hint = if hits.is_empty() {
+        format!(
+            "looked for {} in {} and its immediate child directories.\n\
+             If your lockfile lives deeper, point at it with --path <dir>.",
+            candidates.join(", "),
+            root.display()
+        )
+    } else {
+        let list = hits
+            .iter()
+            .map(|p| p.strip_prefix(root).unwrap_or(p).display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "found multiple candidate lockfiles under {} ({list}).\n\
+             Pick one with --path <dir> — InstallGuard does not auto-merge \
+             across subprojects.",
+            root.display()
+        )
+    };
+    Err(anyhow!("no supported lockfile found: {hint}"))
 }
 
 fn build_provider(args: &EvalArgs) -> Result<Box<dyn SignalProvider>> {
@@ -3527,5 +3595,87 @@ mod tests {
             v["changes"][0]["after"]["reasonCodes"][0],
             "disallowed-lifecycle-script"
         );
+    }
+
+    // ── locate_lockfile fallback ──────────────────────────────────────
+
+    fn test_adapters() -> Vec<Box<dyn LockfileAdapter>> {
+        vec![
+            Box::new(PnpmAdapter::new()),
+            Box::new(YarnAdapter::new()),
+            Box::new(NpmAdapter::new()),
+            Box::new(PypiAdapter::new()),
+        ]
+    }
+
+    #[test]
+    fn locate_lockfile_prefers_root_over_children() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("package-lock.json"), "{}").unwrap();
+        std::fs::create_dir(tmp.path().join("sub")).unwrap();
+        std::fs::write(tmp.path().join("sub/poetry.lock"), "").unwrap();
+        let adapters = test_adapters();
+        let path = match locate_lockfile(tmp.path(), &adapters) {
+            Ok((_, p)) => p,
+            Err(e) => panic!("expected ok, got: {e}"),
+        };
+        assert_eq!(path, tmp.path().join("package-lock.json"));
+    }
+
+    #[test]
+    fn locate_lockfile_finds_single_child_subdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("cpi_myca")).unwrap();
+        std::fs::write(tmp.path().join("cpi_myca/poetry.lock"), "").unwrap();
+        let adapters = test_adapters();
+        let path = match locate_lockfile(tmp.path(), &adapters) {
+            Ok((_, p)) => p,
+            Err(e) => panic!("expected ok, got: {e}"),
+        };
+        assert_eq!(path, tmp.path().join("cpi_myca/poetry.lock"));
+    }
+
+    #[test]
+    fn locate_lockfile_errors_on_multiple_subdir_hits() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("a")).unwrap();
+        std::fs::write(tmp.path().join("a/poetry.lock"), "").unwrap();
+        std::fs::create_dir(tmp.path().join("b")).unwrap();
+        std::fs::write(tmp.path().join("b/package-lock.json"), "{}").unwrap();
+        let adapters = test_adapters();
+        let err = locate_lockfile(tmp.path(), &adapters)
+            .err()
+            .expect("expected error on multiple subdir hits")
+            .to_string();
+        assert!(err.contains("multiple"), "expected 'multiple' in {err}");
+        assert!(err.contains("a/poetry.lock") || err.contains("a\\poetry.lock"));
+        assert!(err.contains("b/package-lock.json") || err.contains("b\\package-lock.json"),);
+    }
+
+    #[test]
+    fn locate_lockfile_skips_node_modules_and_dotdirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("node_modules")).unwrap();
+        std::fs::write(tmp.path().join("node_modules/package-lock.json"), "{}").unwrap();
+        std::fs::create_dir(tmp.path().join(".cache")).unwrap();
+        std::fs::write(tmp.path().join(".cache/poetry.lock"), "").unwrap();
+        let adapters = test_adapters();
+        let err = locate_lockfile(tmp.path(), &adapters)
+            .err()
+            .expect("expected error when only ignored dirs hold lockfiles")
+            .to_string();
+        assert!(err.contains("--path"), "missing --path hint in {err}");
+    }
+
+    #[test]
+    fn locate_lockfile_error_mentions_path_hint_when_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let adapters = test_adapters();
+        let err = locate_lockfile(tmp.path(), &adapters)
+            .err()
+            .expect("expected error on empty dir")
+            .to_string();
+        assert!(err.contains("--path"));
+        assert!(err.contains("immediate child directories"));
     }
 }
