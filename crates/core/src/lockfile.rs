@@ -20,12 +20,20 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::decision::{Decision, Reason};
-use crate::dependency::{ResolvedDependency, Source};
+use crate::dependency::{Ecosystem, ResolvedDependency, Source};
 use crate::policy::Policy;
 use crate::signal::{Signal, SignalSet};
 
 /// Current schema version of `installguard.lock`. Bump on breaking changes.
-pub const LOCK_SCHEMA_VERSION: u32 = 1;
+///
+/// * v1 (≤0.2.6) — single-ecosystem lock; `installguard verify --frozen`
+///   assumed every entry was npm.
+/// * v2 (≥0.2.7) — each [`LockDecision`] carries an `ecosystem` field
+///   so frozen rebuilds can reconstruct cross-ecosystem dependency sets
+///   without consulting the original lockfile. v1 locks are still read
+///   (the field defaults to `npm` for backward compatibility); they are
+///   written back as v2 on the next `installguard evaluate`.
+pub const LOCK_SCHEMA_VERSION: u32 = 2;
 
 /// Top-level lock file. Field order matches serialised output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +73,12 @@ pub struct LockSummary {
 pub struct LockDecision {
     pub name: String,
     pub version: String,
+    /// Ecosystem of the resolved dependency. Optional in the wire
+    /// format for backward-compatible reads of v1 locks; on absence
+    /// frozen rebuilds default to [`Ecosystem::Npm`] (the only
+    /// ecosystem v1 locks could have contained).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecosystem: Option<Ecosystem>,
     pub direct: bool,
     /// Stable identifier for the source kind (e.g. `registry`, `git`,
     /// `tarball`). Full source detail is intentionally omitted to keep the
@@ -147,7 +161,10 @@ impl InstallguardLock {
 
     pub fn from_json(raw: &str) -> Result<Self, LockError> {
         let lock: Self = serde_json::from_str(raw)?;
-        if lock.schema_version != LOCK_SCHEMA_VERSION {
+        // Accept any non-future schema version. v1 locks lack the
+        // per-entry `ecosystem` field; serde defaults it to `None`
+        // and frozen rebuilds treat `None` as `Ecosystem::Npm`.
+        if lock.schema_version > LOCK_SCHEMA_VERSION {
             return Err(LockError::UnsupportedVersion(lock.schema_version));
         }
         Ok(lock)
@@ -245,6 +262,7 @@ fn build_decision(e: &LockEntry<'_>) -> LockDecision {
     LockDecision {
         name: e.dep.name.clone(),
         version: e.dep.version.clone(),
+        ecosystem: Some(e.dep.ecosystem),
         direct: e.dep.direct,
         source: source_kind(&e.dep.source).to_string(),
         decision: decision.to_string(),

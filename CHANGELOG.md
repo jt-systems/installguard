@@ -11,6 +11,43 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.2.7] — 2026-05-15
+
+**purl is now ecosystem-aware, and the lock format records each
+entry's ecosystem.** Two related correctness fixes that an external
+review surfaced.
+
+* **`purl_for` distinguishes PyPI from npm.** Until this release,
+  every component in a CycloneDX SBOM and every product reference
+  in a generated VEX document was emitted as `pkg:npm/<name>@…`,
+  including PyPI deps. Downstream tooling (Dependency-Track,
+  GUAC, OSV-Scanner ingestion of our SBOMs) couldn't tell a
+  Python `requests` from an npm `requests` and would either
+  match the wrong advisory set or skip the dep entirely.
+  `purl_for` now produces `pkg:pypi/<name>@<version>` for any
+  `Ecosystem::Pypi` dep, with the name normalised per [PEP 503]
+  (lowercased; runs of `_`, `-`, and `.` collapsed to a single
+  `-`) as the purl spec requires for the `pypi` type. `npm` /
+  `pnpm` / `yarn` deps still emit `pkg:npm/…` (they share the npm
+  registry, so the purl spec keeps the type the same). Smoke:
+  `pyyaml@6.0.1` now appears in the SBOM as
+  `pkg:pypi/pyyaml@6.0.1` instead of `pkg:npm/pyyaml@6.0.1`.
+
+* **`installguard.lock` schema bumped to v2 with a per-entry
+  `ecosystem` field.** The frozen-policy rebuild (`installguard
+  scan --frozen` and friends) used to hardcode every reconstructed
+  dependency to `Ecosystem::Npm`, so an offline run replayed PyPI
+  decisions against the wrong policy family and could mis-attribute
+  reasons in the audit log. Each `LockDecision` now carries an
+  `ecosystem` field; frozen rebuilds use it directly. v1 locks
+  (written by ≤0.2.6) still load — the field defaults to absent,
+  which the rebuild treats as `Npm` (the only ecosystem v1 locks
+  could have contained), then re-emits as v2 on the next
+  `installguard lock`. Forward-incompatible schema versions still
+  abort with exit 2.
+
+[PEP 503]: https://peps.python.org/pep-0503/#normalized-names
+
 ## [0.2.6] — 2026-05-15
 
 **Honesty pass on the provenance gate, fail-loud on catalogue

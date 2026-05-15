@@ -203,16 +203,57 @@ fn component_from(dep: &ResolvedDependency, decision: &Decision) -> Component {
     }
 }
 
-/// Canonical purl for a resolved dependency. `pkg:npm/<name>@<version>`
-/// for all currently-supported ecosystems; scoped names percent-encode
-/// the leading `@`. Re-used by the VEX emitter so SBOM and VEX stay
-/// referentially compatible.
+/// Canonical purl for a resolved dependency. Ecosystem-aware:
+///
+/// * `npm` / `pnpm` / `yarn` → `pkg:npm/<name>@<version>`. Scoped
+///   names percent-encode the leading `@` (`pkg:npm/%40scope/pkg@…`).
+/// * `pypi` → `pkg:pypi/<name>@<version>` with the name normalised
+///   per [PEP 503] (lowercased; runs of `_`, `-`, and `.` collapsed
+///   to a single `-`). The purl spec requires this so two
+///   distributions that PyPI considers identical produce the same
+///   purl regardless of how they were typed in the lockfile.
+///
+/// Re-used by the VEX emitter so SBOM and VEX stay referentially
+/// compatible.
+///
+/// [PEP 503]: https://peps.python.org/pep-0503/#normalized-names
 #[must_use]
 pub fn purl_for(dep: &ResolvedDependency) -> String {
-    // All currently-supported ecosystems share the npm registry, so the
-    // purl type is always `npm`. Revisit when we add non-npm ecosystems.
-    let _ = Ecosystem::Npm;
-    format!("pkg:npm/{}@{}", encode_purl_segment(&dep.name), dep.version)
+    match dep.ecosystem {
+        Ecosystem::Npm | Ecosystem::Pnpm | Ecosystem::Yarn => {
+            format!("pkg:npm/{}@{}", encode_purl_segment(&dep.name), dep.version)
+        }
+        Ecosystem::Pypi => {
+            format!(
+                "pkg:pypi/{}@{}",
+                normalize_pypi_name(&dep.name),
+                dep.version
+            )
+        }
+    }
+}
+
+/// PEP 503 name normalisation: lowercase, then collapse any run of
+/// `_`, `-`, or `.` into a single `-`. Required by the purl spec for
+/// the `pypi` type so distributions that PyPI considers identical
+/// (e.g. `Flask`, `flask`, `FLASK`) round-trip to the same purl.
+fn normalize_pypi_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut prev_sep = false;
+    for c in name.chars() {
+        if matches!(c, '_' | '-' | '.') {
+            if !prev_sep {
+                out.push('-');
+                prev_sep = true;
+            }
+        } else {
+            for lc in c.to_lowercase() {
+                out.push(lc);
+            }
+            prev_sep = false;
+        }
+    }
+    out
 }
 
 /// Encode a name segment for purl: scoped npm names like `@scope/pkg`
@@ -286,6 +327,33 @@ mod tests {
     fn purl_encodes_scope() {
         let d = dep("@scope/pkg", "1.2.3", true);
         assert_eq!(purl_for(&d), "pkg:npm/%40scope/pkg@1.2.3");
+    }
+
+    #[test]
+    fn purl_pypi_normalises_per_pep503() {
+        let mut d = dep("Flask", "2.3.0", true);
+        d.ecosystem = Ecosystem::Pypi;
+        assert_eq!(purl_for(&d), "pkg:pypi/flask@2.3.0");
+
+        // Underscores, dots, runs of separators all collapse to one '-'.
+        let mut d = dep("Foo_Bar.Baz", "1.0", true);
+        d.ecosystem = Ecosystem::Pypi;
+        assert_eq!(purl_for(&d), "pkg:pypi/foo-bar-baz@1.0");
+
+        let mut d = dep("typing__extensions--x", "4.0", true);
+        d.ecosystem = Ecosystem::Pypi;
+        assert_eq!(purl_for(&d), "pkg:pypi/typing-extensions-x@4.0");
+    }
+
+    #[test]
+    fn purl_pnpm_yarn_use_npm_type() {
+        // pnpm and yarn deps both share the npm registry; the purl
+        // type stays `npm` for them, not `pnpm`/`yarn`.
+        let mut d = dep("lodash", "4.17.21", true);
+        d.ecosystem = Ecosystem::Pnpm;
+        assert_eq!(purl_for(&d), "pkg:npm/lodash@4.17.21");
+        d.ecosystem = Ecosystem::Yarn;
+        assert_eq!(purl_for(&d), "pkg:npm/lodash@4.17.21");
     }
 
     #[test]

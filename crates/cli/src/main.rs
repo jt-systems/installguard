@@ -694,7 +694,10 @@ fn evaluate_frozen(args: &EvalArgs) -> Result<EvalOutput> {
         .iter()
         .map(|d| DepResult {
             dep: ResolvedDependency {
-                ecosystem: Ecosystem::Npm,
+                // v1 locks lacked the per-entry ecosystem field;
+                // they could only ever have contained npm-family
+                // deps, so default to Npm on absence.
+                ecosystem: d.ecosystem.unwrap_or(Ecosystem::Npm),
                 name: d.name.clone(),
                 version: d.version.clone(),
                 integrity: None,
