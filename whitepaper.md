@@ -3,6 +3,10 @@
 ## Dependency Freshness & Install Script Governance
 ### A Practical Approach to Modern JavaScript Supply Chain Risk
 
+> **Status note (2026-05-15):** This document is a background paper, not the product source of truth.
+> For current capabilities, ecosystem coverage, policy keys, install / verify instructions, and release status,
+> use [README.md](README.md), [DESIGN.md](DESIGN.md), [ROADMAP.md](ROADMAP.md), and [installguard.dev](https://installguard.dev).
+
 ---
 
 ## Executive Summary
@@ -44,7 +48,7 @@ The approach is intentionally pragmatic:
 - compatible with existing npm / pnpm / yarn workflows
 - suitable for gradual enterprise adoption
 
-This paper covers the model, an explicit threat model, the proposed architecture and deployment topologies, the limitations and trade-offs, and how InstallGuard maps onto existing standards (SLSA, SSDF, CRA, OpenSSF Scorecard).
+This paper deliberately focuses on the model, the threat picture, the architectural shape, the limitations and trade-offs, and the standards mapping. Live product comparisons, rollout guidance, and configuration details now live in the README and docs site, where they can stay current.
 
 ---
 
@@ -529,125 +533,16 @@ InstallGuard is designed to support, not replace, established frameworks.
 
 ---
 
-## 15. pnpm & Ecosystem Alignment
+## 15. How To Use This Paper
 
-Modern package managers are already moving toward stronger governance. Recent pnpm releases include:
+This document is intentionally narrower than the README and docs site.
 
-- minimum release age (`minimumReleaseAge`)
-- lifecycle script restrictions (`onlyBuiltDependencies`)
-- exotic dependency blocking
-- stronger lockfile enforcement
+- Use it for the **problem statement**: why freshness governance exists, what threat model it addresses, and what trade-offs it makes.
+- Use it for the **architecture and trust model**: what the system is trying to prove, where it depends on registries, and how it fits alongside standards work.
+- Use it for the **limitations**: what InstallGuard does not claim to solve.
+- Do **not** use it as the source of truth for shipped features, policy syntax, ecosystem coverage, release status, or tool comparisons. Those move faster than a long-form paper and now live in [README.md](README.md), [DESIGN.md](DESIGN.md), [ROADMAP.md](ROADMAP.md), and [installguard.dev](https://installguard.dev).
 
-npm and yarn are following similar trajectories with provenance, trusted publishers, and tighter default script handling.
-
-InstallGuard complements these capabilities by adding centralised reporting, policy visibility, enterprise governance, risk scoring, PR-level review visibility, and organisation-wide auditing.
-
-The objective is not to replace package-manager protections — it is to **operationalise** them across an organisation.
-
----
-
-## 16. Ecosystem Reach Beyond npm
-
-While the original motivation was JavaScript, the freshness-governance principles apply to every package ecosystem. InstallGuard's core is designed to be language-agnostic. PyPI support ships today, with additional adapters planned for:
-
-- **PyPI** (already targeted by ctx, phpass-style attacks)
-- **RubyGems**
-- **Maven Central**
-- **crates.io**
-- **Go modules**
-- **NuGet**
-- **Hex**
-
-The signal model (publisher change, install hooks, source type, age, provenance) translates directly; only the metadata adapters change.
-
----
-
-## 17. Comparison With Existing Tools
-
-InstallGuard is **complementary** to, not a replacement for, the tools below.
-
-| Capability                          | InstallGuard | Socket | Snyk | npm audit | pnpm built-ins |
-| ----------------------------------- | :----------: | :----: | :--: | :-------: | :------------: |
-| Known-CVE scanning                  |      ✗*      |   ◐    |  ✓   |     ✓     |       ◐        |
-| Behaviour / install-script analysis |      ✓       |   ✓    |  ◐   |     ✗     |       ◐        |
-| Release-age governance              |      ✓       |   ◐    |  ✗   |     ✗     |       ✓        |
-| Lifecycle-script approval           |      ✓       |   ✓    |  ✗   |     ✗     |       ✓        |
-| Exotic-source blocking              |      ✓       |   ◐    |  ✗   |     ✗     |       ◐        |
-| Org-wide policy & audit             |      ✓       |   ✓    |  ✓   |     ✗     |       ✗        |
-| Build attestation of policy         |      ✓       |   ✗    |  ✗   |     ✗     |       ✗        |
-| Registry-proxy enforcement (roadmap M6) |   ◐    |   ✗    |  ✗   |     ✗     |       ✗        |
-| Open source                         |      ✓       |   ◐    |  ✗   |     ✓     |       ✓        |
-
-`*` InstallGuard *consumes* OSV/GHSA as a signal but does not maintain its own CVE database.
-
-Legend: ✓ supported, ◐ partial, ✗ not supported.
-
-For InstallGuard, `◐` on registry-proxy enforcement means the reusable policy engine is shipped today, while the proxy plugins themselves remain on the roadmap.
-
----
-
-## 18. Enterprise Adoption Strategy
-
-### Phase 1 — Visibility
-
-- warn only
-- generate reports
-- annotate pull requests
-- measure dependency risk posture
-
-No installs are blocked. This allows organisations to understand current dependency behaviour, install-script prevalence, and freshness exposure.
-
-### Phase 2 — Policy Enforcement
-
-- release-age enforcement
-- install script approval lists
-- Git / exotic dependency restrictions
-- CI gating on policy violations
-
-### Phase 3 — Mature Governance
-
-- registry-proxy enforcement (org-wide)
-- organisation-wide policy baselines
-- package allowlists with attribution and expiry
-- provenance enforcement
-- mandatory review workflows for new dependencies
-
----
-
-## 19. Recommended Policies
-
-### Baseline
-
-```yaml
-minimumReleaseAge: 1440        # 24h
-blockExoticSubdeps: true
-```
-
-### Stronger CI Policy
-
-```yaml
-minimumReleaseAge: 4320        # 72h
-strictBuildScriptApproval: true
-requireReviewForNewDependencies: true
-flagPublisherChange: warn
-```
-
-### High-Security Environments
-
-```yaml
-minimumReleaseAge: 10080       # 7d
-registryAllowlistOnly: true
-noInstallScriptsByDefault: true
-manualDependencyApproval: true
-requireProvenance: true
-flagPublisherChange: block
-require2FAForDirectDeps: true
-sandboxInstallScripts: true
-```
-
----
-
-## 20. Limitations & Trade-offs
+## 16. Limitations & Trade-offs
 
 A defence based on freshness has predictable trade-offs that adopters must understand and design around.
 
@@ -661,37 +556,7 @@ A defence based on freshness has predictable trade-offs that adopters must under
 
 ---
 
-## 21. Open Questions & Roadmap
-
-This is an evolving design and several questions are deliberately left open:
-
-- What is the right default trust-score weighting across signals, and how should it adapt by ecosystem?
-- How should InstallGuard interoperate with confidential / private registries that intentionally lack public metadata?
-- Should the control plane be self-hostable only, or also offered as a managed service (with the obvious trust implications)?
-- What is the most useful UX for surfacing trust-score deltas in PR reviews — numeric, badge-based, narrative?
-- How can community-maintained allowlists (similar to ad-block lists) be safely shared without becoming attack vectors themselves?
-
-A detailed technical design lives in [DESIGN.md](DESIGN.md) and the prioritised feature roadmap in [ROADMAP.md](ROADMAP.md).
-
----
-
-## 22. Why This Matters
-
-Modern supply-chain attacks increasingly exploit automation, speed, implicit trust, install-time execution, and developer convenience.
-
-The JavaScript ecosystem does not necessarily need more scanners. It needs better dependency hygiene, slower trust propagation, clearer governance, improved visibility, and stronger install-time boundaries.
-
-Freshness governance provides a practical, low-friction method for reducing exposure to modern npm supply-chain attacks without fundamentally disrupting developer workflows.
-
-The future of dependency security is unlikely to rely solely on malware detection. Instead, it will increasingly depend on policy, provenance, execution control, trust maturity, and operational governance.
-
-And sometimes:
-
-> simply waiting 24 hours before installing something.
-
----
-
-## References
+## 17. References
 
 - JFrog Research — "Shai-Hulud: Here We Go Again" (2024–2025)
 - npm Lifecycle Scripts Documentation

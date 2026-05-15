@@ -1,6 +1,6 @@
 # InstallGuard — Roadmap
 
-> Companion to [whitepaper.md](whitepaper.md) and [DESIGN.md](DESIGN.md). Priorities reflect maximum risk reduction per unit of effort, not chronological dates.
+> Companion to [whitepaper.md](whitepaper.md) (background / threat model) and [DESIGN.md](DESIGN.md). Priorities reflect maximum risk reduction per unit of effort, not chronological dates.
 
 Status legend: ☐ planned · ◐ in progress · ☑ shipped
 

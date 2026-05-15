@@ -1,6 +1,6 @@
 # InstallGuard — Technical Design
 
-> Companion to [whitepaper.md](whitepaper.md). The whitepaper covers the *why*; this document covers the *how*.
+> Companion to [whitepaper.md](whitepaper.md). The whitepaper covers the background, threat model, and limits; this document covers the *how*.
 
 ---
 
@@ -113,7 +113,7 @@ v1 providers:
 
 Two backends:
 
-1. **Built-in DSL** — declarative YAML for the 95% case (the policies shown in the whitepaper).
+1. **Built-in DSL** — declarative YAML for the 95% case (the examples live in the README and docs site).
 2. **Rego (OPA)** — for orgs that already standardise on Rego; embedded via `regorus`.
 
 A policy evaluation produces a `Decision`:

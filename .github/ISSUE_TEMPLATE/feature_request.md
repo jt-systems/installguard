@@ -7,7 +7,7 @@ labels: enhancement
 ## Problem / motivation
 
 <!-- What attack class, operational pain, or gap in coverage does this address?
-     Link to the relevant whitepaper or DESIGN.md section if applicable. -->
+     Link to the relevant whitepaper threat-model section or DESIGN.md section if applicable. -->
 
 ## Proposed solution
 
@@ -16,7 +16,7 @@ labels: enhancement
 
 ## Attack class addressed
 
-<!-- Which of the attack patterns from the whitepaper does this mitigate?
+<!-- Which threat-model pattern from the whitepaper does this mitigate?
      If none, explain the operational value. -->
 
 ## False-positive risk

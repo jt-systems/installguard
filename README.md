@@ -26,7 +26,7 @@ InstallGuard takes a different angle:
 
 > Sometimes the best supply-chain defence is simply **waiting 24 hours** before installing something.
 
-Read the full argument in the [whitepaper](whitepaper.md).
+Read the longer background paper in [whitepaper.md](whitepaper.md).
 
 ---
 
@@ -67,7 +67,7 @@ InstallGuard is **complementary**, not a replacement, for:
 - Dependabot / Renovate — keep them; InstallGuard makes their PRs safer to merge.
 - pnpm built-ins (`minimumReleaseAge`, `onlyBuiltDependencies`) — InstallGuard *operationalises* these across an organisation: central policy, audit, attestation, and cross-ecosystem evidence.
 
-Comparison table in [whitepaper §17](whitepaper.md#17-comparison-with-existing-tools).
+Current comparisons and positioning live on [installguard.dev/start/what](https://installguard.dev/start/what/).
 
 ---
 
@@ -172,7 +172,7 @@ If you're interested in early adoption, threat-model review, real-world lockfile
 
 ## Documentation
 
-- [Whitepaper](whitepaper.md) — the conceptual model, threat model, and standards mapping.
+- [Whitepaper](whitepaper.md) — background paper: conceptual model, threat model, standards mapping, and limits.
 - [DESIGN.md](DESIGN.md) — the technical design (architecture, policy DSL, attestation format, performance targets).
 - [ROADMAP.md](ROADMAP.md) — prioritised milestones from foundations through compliance reporting.
 
@@ -185,7 +185,7 @@ If you're interested in early adoption, threat-model review, real-world lockfile
 3. **Offline-capable.** No telemetry or hidden phone-home path. Air-gapped deployments are first-class.
 4. **Boring distribution.** Single static binary. No `node_modules`. No install scripts of our own.
 5. **Operationalise existing controls.** Don't reinvent pnpm, Sigstore, or OSV — orchestrate them.
-6. **Honest about limits.** See [whitepaper §20](whitepaper.md#20-limitations--trade-offs).
+6. **Honest about limits.** See [whitepaper §16](whitepaper.md#16-limitations--trade-offs).
 
 ---
 
