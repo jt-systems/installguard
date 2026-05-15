@@ -216,7 +216,7 @@ fn sha2_hex(bytes: &[u8]) -> String {
 }
 
 fn io_err(e: serde_json::Error) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::Other, e)
+    std::io::Error::other(e)
 }
 
 #[cfg(test)]

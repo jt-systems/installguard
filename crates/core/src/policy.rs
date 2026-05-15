@@ -38,17 +38,12 @@ pub enum PolicyError {
     UnsupportedVersion(u32),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ScriptPolicy {
+    #[default]
     DenyByDefault,
     AllowByDefault,
-}
-
-impl Default for ScriptPolicy {
-    fn default() -> Self {
-        Self::DenyByDefault
-    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]

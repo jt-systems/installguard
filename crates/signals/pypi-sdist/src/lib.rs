@@ -404,19 +404,18 @@ fn extract_backend_python_files(
 }
 
 fn archive_python_path_in_backend(path: &Path, backend_paths: &[String]) -> Option<String> {
-    let name = path.file_name().and_then(|n| n.to_str())?;
-    if !name.ends_with(".py") {
+    if !path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("py"))
+    {
         return None;
     }
-    for candidate in archive_path_variants(path) {
-        if backend_paths
+    archive_path_variants(path).into_iter().find(|candidate| {
+        backend_paths
             .iter()
-            .any(|backend_path| path_within_backend_root(&candidate, backend_path))
-        {
-            return Some(candidate);
-        }
-    }
-    None
+            .any(|backend_path| path_within_backend_root(candidate, backend_path))
+    })
 }
 
 fn archive_path_variants(path: &Path) -> Vec<String> {

@@ -1802,7 +1802,7 @@ fn run_report(args: ReportArgs) -> Result<ExitCode> {
         exit_code,
         out,
     } = args;
-    let raw = if from == PathBuf::from("-") {
+    let raw = if from == Path::new("-") {
         let mut buf = String::new();
         std::io::stdin().read_to_string(&mut buf)?;
         buf
