@@ -11,6 +11,48 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-05-15
+
+**Poetry lockfiles are now first-class.** The PyPI adapter grows
+a third format alongside `uv.lock` and hash-pinned
+`requirements.txt`: `poetry.lock`, the TOML lockfile written by
+[Poetry](https://python-poetry.org/).
+
+* New `parse_poetry_lock` reader. Lock-version `1.x` and `2.x`
+  are accepted; the per-package shape is stable across them.
+  Future major versions are rejected with
+  `AdapterError::UnsupportedVersion` so a schema change can't
+  silently slip through.
+* Direct vs transitive: poetry stores the project's direct
+  dependency set in `pyproject.toml`, not the lockfile. The
+  adapter peeks at the sibling `pyproject.toml` (when present)
+  and reads three shapes:
+  - `[tool.poetry.dependencies]` (poetry classic)
+  - `[tool.poetry.group.<name>.dependencies]` (any group, dev included)
+  - `[project.dependencies]` (PEP 621, used by poetry 2.x in modern mode)
+  PEP 508 markers and extras (`requests[security]>=2; python_version>='3.8'`)
+  are stripped to recover the bare distribution name. The `python`
+  pin is excluded.
+* When no sibling `pyproject.toml` exists every entry is
+  conservatively flagged transitive — better than lying about
+  provenance when we genuinely don't know.
+* Source classification mirrors the other PyPI shapes:
+  `[package.source]` with `type = "git"` → `Source::Git` (with
+  `resolved_reference` preferred over `reference`),
+  `type = "url"` → `Source::Tarball`, `type = "file"` /
+  `"directory"` → `Source::File`, `"legacy"` and registry-default
+  → `Source::Pypi`.
+* Integrity preference: any non-`.whl` file (typically the
+  sdist) over the first wheel hash, mirroring `uv.lock`.
+* CLI auto-discovery extended: `installguard explain` /
+  `evaluate` now finds `poetry.lock` in `--path` directories
+  alongside the other supported lockfiles.
+
+Smoke-tested against a real `requests@2.31.0` `poetry.lock` +
+`pyproject.toml` pair — all six PyPI signals
+(published_at, three OSV advisories, project_metadata,
+scorecard_score) emit identically to the `uv.lock` path.
+
 ## [0.2.2] — 2026-05-15
 
 **OpenSSF Scorecard now scores PyPI dependencies.** The Scorecard

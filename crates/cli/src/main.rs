@@ -795,14 +795,15 @@ fn locate_lockfile<'a>(
     // Conventional filenames in priority order. The first existing match
     // wins; pnpm-lock.yaml is checked before package-lock.json because pnpm
     // projects sometimes also ship a stale npm lockfile. uv.lock is
-    // preferred over requirements.txt because uv.lock is a true lockfile
-    // shape; requirements.txt only qualifies when generated with hashes
-    // and is the legacy fallback.
+    // preferred over poetry.lock and requirements.txt because uv.lock is
+    // the newest first-class shape; poetry.lock comes next; requirements.txt
+    // only qualifies when generated with hashes and is the legacy fallback.
     let candidates = [
         "pnpm-lock.yaml",
         "yarn.lock",
         "package-lock.json",
         "uv.lock",
+        "poetry.lock",
         "requirements.txt",
     ];
     for name in candidates {
