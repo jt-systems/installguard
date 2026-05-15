@@ -11,6 +11,23 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.13] — 2026-05-15
+
+New `installguard explain <name>@<version>` subcommand. Runs the
+same evaluation pipeline as `scan` / `doctor`, but for one
+package coordinate already present in the lockfile, prints the
+full per-package audit trail: every signal observed (rendered as
+compact JSON, one per line, so every variant round-trips
+losslessly), every reason produced (with stable kebab-case code,
+human summary, and remediation hint), and the trust-score
+breakdown with each weighted contribution and rationale. Pretty
+output is the default; `--format json` emits a stable
+machine-readable shape (`schemaVersion: 1`) suitable for piping
+into tooling. Always exits 0 — explain is informational; gating
+belongs in `scan` or `ci`. Closes the "scan flagged this — *why*?"
+loop without requiring operators to dig through audit logs or
+re-run with `RUST_LOG=debug`.
+
 ## [0.1.12] — 2026-05-14
 
 New `installguard doctor` subcommand. Runs the same evaluation

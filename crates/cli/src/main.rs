@@ -24,6 +24,7 @@ use installguard_core::dependency::ResolvedDependency;
 use installguard_core::lockfile::{InstallguardLock, LockEntry};
 use installguard_core::policy::{EvalContext, Policy};
 use installguard_core::signal::{SignalProvider, SignalSet};
+use installguard_core::trust_score::TrustScore;
 use installguard_core::CompositeProvider;
 use installguard_signal_depsdev::DepsDevProvider;
 use installguard_signal_npm_registry::NpmRegistryProvider;
@@ -101,6 +102,18 @@ enum Command {
     /// Always exits 0 — `doctor` is advisory; use `scan` or `ci` to
     /// gate.
     Doctor(DoctorArgs),
+    /// Explain why a single package received its decision.
+    ///
+    /// Runs the same evaluation pipeline as `scan` but, for one
+    /// `name@version` coordinate already present in the lockfile,
+    /// prints every signal observed, every reason produced, the
+    /// per-signal trust-score breakdown, and remediation hints.
+    /// Useful as a follow-up to `scan` / `doctor` when triaging a
+    /// single finding.
+    ///
+    /// Always exits 0 — `explain` is informational; use `scan` or
+    /// `ci` to gate.
+    Explain(ExplainArgs),
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -357,6 +370,31 @@ struct DoctorArgs {
     common: EvalArgs,
 }
 
+#[derive(Debug, clap::Args)]
+struct ExplainArgs {
+    /// Package coordinate to explain. Accepts `name@version` or
+    /// `@scope/name@version`. The package must be present in the
+    /// project's lockfile; otherwise the command exits with an
+    /// error.
+    target: String,
+
+    #[command(flatten)]
+    common: EvalArgs,
+
+    /// Output format. `pretty` is the default for interactive
+    /// terminals; `json` emits a stable machine-readable shape
+    /// matching the `ci` summary's per-decision schema, extended
+    /// with the full signal list and trust-score breakdown.
+    #[arg(long, value_enum, default_value_t = ExplainFormat::Pretty)]
+    format: ExplainFormat,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ExplainFormat {
+    Pretty,
+    Json,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ReportFormat {
     Markdown,
@@ -398,6 +436,7 @@ async fn main() -> ExitCode {
         Command::Sign(args) => run_sign(args),
         Command::Report(args) => run_report(args),
         Command::Doctor(args) => run_doctor(args).await,
+        Command::Explain(args) => run_explain(args).await,
     };
     match result {
         Ok(code) => code,
@@ -1980,6 +2019,251 @@ fn render_doctor_yaml(s: &DoctorSuggestion) -> String {
     out
 }
 
+// ── `explain` subcommand ────────────────────────────────────────────────────
+//
+// Same evaluation pipeline as `scan` / `doctor`, but for one specific
+// `name@version` coordinate. Emits the full per-package audit trail:
+// every signal observed, every reason produced, the trust-score
+// breakdown, and per-reason remediation hints. Always exits 0 —
+// explain is informational; gating belongs in `scan` or `ci`.
+
+async fn run_explain(args: ExplainArgs) -> Result<ExitCode> {
+    let (name, version) = parse_explain_target(&args.target)?;
+    let output = evaluate(&args.common).await?;
+    let result = output
+        .results
+        .iter()
+        .find(|r| r.dep.name == name && r.dep.version == version)
+        .ok_or_else(|| {
+            anyhow!(
+                "`{name}@{version}` is not present in lockfile {}",
+                output.lockfile.display()
+            )
+        })?;
+    let trust = TrustScore::compute(&result.signals);
+    match args.format {
+        ExplainFormat::Pretty => emit_explain_pretty(&output, result, &trust, color_choice()),
+        ExplainFormat::Json => {
+            let payload = build_explain_json(&output, result, &trust);
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Split `name@version` / `@scope/name@version` on the *last* `@`.
+/// Versions are bare semver (no `@`), so this is unambiguous and lets
+/// scoped names round-trip without special-casing.
+fn parse_explain_target(s: &str) -> Result<(String, String)> {
+    let (name, version) = s
+        .rsplit_once('@')
+        .ok_or_else(|| anyhow!("expected `name@version`, got `{s}`"))?;
+    if name.is_empty() {
+        return Err(anyhow!("missing package name in `{s}`"));
+    }
+    if version.is_empty() {
+        return Err(anyhow!("missing version in `{s}`"));
+    }
+    Ok((name.to_string(), version.to_string()))
+}
+
+fn emit_explain_pretty(output: &EvalOutput, r: &DepResult, trust: &TrustScore, color: ColorChoice) {
+    use std::io::Write as _;
+    let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
+    write_explain_pretty(&mut stdout, output, r, trust, color).ok();
+    stdout.flush().ok();
+}
+
+fn write_explain_pretty<W: std::io::Write>(
+    out: &mut W,
+    output: &EvalOutput,
+    r: &DepResult,
+    trust: &TrustScore,
+    color: ColorChoice,
+) -> std::io::Result<()> {
+    let (icon, verdict, accent) = match &r.decision {
+        Decision::Block { .. } => ("✗", "BLOCKED", ANSI_RED),
+        Decision::Warn { .. } => ("!", "WARN", ANSI_YELLOW),
+        Decision::Allow => ("✓", "ALLOW", ANSI_GREEN),
+    };
+    let header = format!("{}@{}", r.dep.name, r.dep.version);
+    writeln!(
+        out,
+        "{} InstallGuard — {}  {}",
+        paint(icon, accent, color),
+        paint_bold(&header, accent, color),
+        paint_bold(verdict, accent, color),
+    )?;
+    writeln!(
+        out,
+        "  {}",
+        paint(
+            &format!(
+                "lockfile {} ({}) · direct: {}",
+                output.lockfile.display(),
+                output.adapter_id,
+                r.dep.direct,
+            ),
+            ANSI_DIM,
+            color,
+        )
+    )?;
+    write_explain_reasons(out, r, accent, color)?;
+    write_explain_signals(out, r, color)?;
+    write_explain_trust(out, trust, color)?;
+    Ok(())
+}
+
+fn write_explain_reasons<W: std::io::Write>(
+    out: &mut W,
+    r: &DepResult,
+    accent: &str,
+    color: ColorChoice,
+) -> std::io::Result<()> {
+    let reasons: &[Reason] = match &r.decision {
+        Decision::Block { reasons } | Decision::Warn { reasons } => reasons.as_slice(),
+        Decision::Allow => &[],
+    };
+    writeln!(out)?;
+    writeln!(out, "{}", paint_bold("Reasons", ANSI_BOLD, color))?;
+    if reasons.is_empty() {
+        writeln!(
+            out,
+            "  {}",
+            paint("(none — package passed policy)", ANSI_DIM, color)
+        )?;
+        return Ok(());
+    }
+    for reason in reasons {
+        writeln!(
+            out,
+            "  • {}  {}",
+            paint_bold(reason.code(), accent, color),
+            reason.human_summary(),
+        )?;
+        if let Some(hint) = reason.remediation() {
+            writeln!(
+                out,
+                "      {}",
+                paint(&format!("\u{21b3} {hint}"), ANSI_DIM, color)
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn write_explain_signals<W: std::io::Write>(
+    out: &mut W,
+    r: &DepResult,
+    color: ColorChoice,
+) -> std::io::Result<()> {
+    writeln!(out)?;
+    writeln!(
+        out,
+        "{} ({} observed)",
+        paint_bold("Signals", ANSI_BOLD, color),
+        r.signals.signals.len(),
+    )?;
+    if r.signals.signals.is_empty() {
+        writeln!(
+            out,
+            "  {}",
+            paint("(no signals — providers returned nothing)", ANSI_DIM, color)
+        )?;
+        return Ok(());
+    }
+    for sig in &r.signals.signals {
+        // Serialize each Signal to compact JSON so every variant
+        // renders without duplicating a per-arm formatter here.
+        // The `kind` tag is always present (serde tag).
+        let line =
+            serde_json::to_string(sig).unwrap_or_else(|_| "<unserializable signal>".to_string());
+        writeln!(out, "  • {line}")?;
+    }
+    Ok(())
+}
+
+fn write_explain_trust<W: std::io::Write>(
+    out: &mut W,
+    trust: &TrustScore,
+    color: ColorChoice,
+) -> std::io::Result<()> {
+    writeln!(out)?;
+    let score_colour = if trust.value >= 70 {
+        ANSI_GREEN
+    } else if trust.value >= 40 {
+        ANSI_YELLOW
+    } else {
+        ANSI_RED
+    };
+    writeln!(
+        out,
+        "{} {}{}",
+        paint_bold("Trust score", ANSI_BOLD, color),
+        paint_bold(&trust.value.to_string(), score_colour, color),
+        paint("/100", ANSI_DIM, color),
+    )?;
+    if trust.contributions.is_empty() {
+        writeln!(
+            out,
+            "  {}",
+            paint(
+                "(no weighted signals — score is the default 100)",
+                ANSI_DIM,
+                color,
+            )
+        )?;
+        return Ok(());
+    }
+    for c in &trust.contributions {
+        let delta_str = if c.delta >= 0 {
+            format!("+{}", c.delta)
+        } else {
+            c.delta.to_string()
+        };
+        let delta_colour = if c.delta >= 0 { ANSI_GREEN } else { ANSI_RED };
+        writeln!(
+            out,
+            "  {}  {}  {}",
+            paint_bold(&format!("{delta_str:>4}"), delta_colour, color),
+            paint(&format!("{:<26}", c.signal), ANSI_DIM, color),
+            c.rationale,
+        )?;
+    }
+    Ok(())
+}
+
+fn build_explain_json(output: &EvalOutput, r: &DepResult, trust: &TrustScore) -> serde_json::Value {
+    serde_json::json!({
+        "schemaVersion": 1,
+        "tool": { "name": "installguard", "version": env!("CARGO_PKG_VERSION") },
+        "evaluatedAt": chrono::Utc::now(),
+        "lockfile": output.lockfile.display().to_string(),
+        "adapter": output.adapter_id,
+        "package": {
+            "name": r.dep.name,
+            "version": r.dep.version,
+            "direct": r.dep.direct,
+            "source": r.dep.source,
+        },
+        "decision": r.decision.label(),
+        "details": r.decision,
+        "reasons": match &r.decision {
+            Decision::Block { reasons } | Decision::Warn { reasons } => reasons
+                .iter()
+                .map(|reason| serde_json::json!({
+                    "code": reason.code(),
+                    "summary": reason.human_summary(),
+                    "remediation": reason.remediation(),
+                }))
+                .collect::<Vec<_>>(),
+            Decision::Allow => Vec::new(),
+        },
+        "signals": r.signals.signals,
+        "trustScore": trust,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2351,5 +2635,140 @@ mod tests {
         let cell = render_reasons_cell(&dec_json);
         assert!(cell.contains("\\|"), "unescaped pipe in cell: {cell}");
         assert!(!cell.contains(" | "), "raw pipe survived in cell: {cell}");
+    }
+
+    // ── explain ────────────────────────────────────────────────────────
+
+    fn render_explain_pretty(r: &DepResult, trust: &TrustScore) -> String {
+        let output = EvalOutput {
+            lockfile: PathBuf::from("/repo/package-lock.json"),
+            lockfile_bytes: Vec::new(),
+            adapter_id: "package-lock.json",
+            policy: Policy::default(),
+            results: Vec::new(),
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        write_explain_pretty(&mut buf, &output, r, trust, ColorChoice::Never).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn explain_target_parses_bare_and_scoped_names() {
+        assert_eq!(
+            parse_explain_target("lodash@4.17.21").unwrap(),
+            ("lodash".into(), "4.17.21".into())
+        );
+        assert_eq!(
+            parse_explain_target("@firebase/util@1.10.0").unwrap(),
+            ("@firebase/util".into(), "1.10.0".into())
+        );
+    }
+
+    #[test]
+    fn explain_target_rejects_missing_version_or_name() {
+        assert!(parse_explain_target("lodash").is_err());
+        assert!(parse_explain_target("lodash@").is_err());
+        assert!(parse_explain_target("@1.0.0").is_err());
+    }
+
+    #[test]
+    fn explain_pretty_renders_block_with_reasons_signals_and_trust() {
+        use installguard_core::signal::Signal;
+        use installguard_core::trust_score::Contribution;
+        let mut r = dep_result(
+            "danger",
+            "1.2.3",
+            Decision::Block {
+                reasons: vec![Reason::DisallowedLifecycleScript {
+                    script: "postinstall".into(),
+                }],
+            },
+        );
+        r.signals.signals.push(Signal::LifecycleScripts {
+            scripts: vec!["postinstall".into()],
+        });
+        let trust = TrustScore {
+            value: 35,
+            contributions: vec![Contribution {
+                signal: "lifecycle_scripts".into(),
+                delta: -15,
+                rationale: "lifecycle scripts present".into(),
+            }],
+        };
+        let body = render_explain_pretty(&r, &trust);
+
+        assert!(body.contains("danger@1.2.3"));
+        assert!(body.contains("BLOCKED"));
+        assert!(body.contains("Reasons"));
+        assert!(body.contains("disallowed-lifecycle-script"));
+        assert!(body.contains("install-time lifecycle script `postinstall` declared"));
+        assert!(body.contains("Signals (1 observed)"));
+        assert!(body.contains("\"kind\":\"lifecycle_scripts\""));
+        assert!(body.contains("Trust score"));
+        assert!(body.contains("35"));
+        assert!(body.contains("-15"));
+        assert!(body.contains("lifecycle scripts present"));
+        assert!(!body.contains('\x1b'), "ANSI leaked: {body}");
+    }
+
+    #[test]
+    fn explain_pretty_allow_path_states_no_reasons_and_default_score() {
+        let r = dep_result("ok", "1.0.0", Decision::Allow);
+        let trust = TrustScore {
+            value: 100,
+            contributions: Vec::new(),
+        };
+        let body = render_explain_pretty(&r, &trust);
+        assert!(body.contains("ALLOW"));
+        assert!(body.contains("(none — package passed policy)"));
+        assert!(body.contains("(no signals — providers returned nothing)"));
+        assert!(body.contains("(no weighted signals — score is the default 100)"));
+    }
+
+    #[test]
+    fn explain_json_carries_reasons_signals_and_trust_breakdown() {
+        use installguard_core::signal::Signal;
+        use installguard_core::trust_score::Contribution;
+        let mut r = dep_result(
+            "danger",
+            "1.2.3",
+            Decision::Block {
+                reasons: vec![Reason::DisallowedLifecycleScript {
+                    script: "postinstall".into(),
+                }],
+            },
+        );
+        r.signals.signals.push(Signal::LifecycleScripts {
+            scripts: vec!["postinstall".into()],
+        });
+        let trust = TrustScore {
+            value: 35,
+            contributions: vec![Contribution {
+                signal: "lifecycle_scripts".into(),
+                delta: -15,
+                rationale: "lifecycle scripts present".into(),
+            }],
+        };
+        let output = EvalOutput {
+            lockfile: PathBuf::from("/repo/package-lock.json"),
+            lockfile_bytes: Vec::new(),
+            adapter_id: "package-lock.json",
+            policy: Policy::default(),
+            results: Vec::new(),
+        };
+        let v = build_explain_json(&output, &r, &trust);
+        assert_eq!(v["schemaVersion"], 1);
+        assert_eq!(v["package"]["name"], "danger");
+        assert_eq!(v["package"]["version"], "1.2.3");
+        assert_eq!(v["decision"], "block");
+        assert_eq!(v["reasons"][0]["code"], "disallowed-lifecycle-script");
+        assert_eq!(
+            v["reasons"][0]["summary"],
+            "install-time lifecycle script `postinstall` declared"
+        );
+        assert!(v["reasons"][0]["remediation"].is_string());
+        assert_eq!(v["signals"][0]["kind"], "lifecycle_scripts");
+        assert_eq!(v["trustScore"]["value"], 35);
+        assert_eq!(v["trustScore"]["contributions"][0]["delta"], -15);
     }
 }
