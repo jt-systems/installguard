@@ -1,4 +1,5 @@
-//! Python-aware install-time pattern detector for `setup.py`.
+//! Python-aware install-time pattern detector for PyPI build-time
+//! source files (`setup.py` and in-tree PEP 517 backend modules).
 //!
 //! Sister to [`installguard_core::script_scan`], which targets
 //! shell-script idioms (curl|sh, wget|bash, /dev/tcp). The
@@ -6,7 +7,7 @@
 //! remote-code-execution tradecraft — but as it manifests in
 //! Python source. The two scanners are run together by
 //! [`scan_python_install_script`] because real-world malicious
-//! `setup.py`s often mix the two (e.g. `os.system("curl … | sh")`
+//! build hooks often mix the two (e.g. `os.system("curl … | sh")`
 //! is caught by the shell scanner via the embedded string, and a
 //! `socket.socket()` reverse shell is caught here).
 //!

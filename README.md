@@ -48,7 +48,7 @@ Status legend: ☑ shipped · ◐ partial · ☐ planned
 | Deterministic `installguard.lock` + in-toto attestation (`policy-evaluation/v1`) | ☑ |
 | CycloneDX SBOM export with policy-decision properties + per-package VEX | ☑ |
 | `--frozen` offline re-verification against a recorded snapshot | ☑ |
-| PyPI install-time scanning (`setup.py` in canonical `.tar.gz` sdists) | ◐ |
+| PyPI install-time scanning (`setup.py` + in-tree PEP 517 backends in canonical `.tar.gz` sdists) | ◐ |
 | Maintainer 2FA status check | ◐ deferred (registry doesn't expose it unauthenticated) |
 | Sigstore signing (cosign keyless / KMS) for attestations | ◐ structural provenance match shipped; full Fulcio/Rekor verification deferred |
 | Sandboxed install-script execution | ☐ planned (M5) |
@@ -164,7 +164,7 @@ If anything fails policy, scripts never run.
 
 ## Project status
 
-InstallGuard is in **alpha**. Milestones 0–4 are shipped, plus the first "Beyond npm" slice: PyPI support for `uv.lock`, `poetry.lock`, hashed `requirements.txt`, PyPI registry signals, Scorecard wiring, PEP 740 claimed provenance, and `setup.py`-based sdist scanning. The next focus areas are sandboxed script execution (M5) and registry-proxy enforcement (M6) — see [ROADMAP.md](ROADMAP.md).
+InstallGuard is in **alpha**. Milestones 0–4 are shipped, plus the first "Beyond npm" slice: PyPI support for `uv.lock`, `poetry.lock`, hashed `requirements.txt`, PyPI registry signals, Scorecard wiring, PEP 740 claimed provenance, and `.tar.gz` sdist scanning for `setup.py` plus in-tree PEP 517 `backend-path` backends. The next focus areas are sandboxed script execution (M5) and registry-proxy enforcement (M6) — see [ROADMAP.md](ROADMAP.md).
 
 If you're interested in early adoption, threat-model review, real-world lockfiles for adapter testing, or contributing rule ideas, please open an issue.
 

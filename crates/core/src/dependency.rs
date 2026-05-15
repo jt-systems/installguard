@@ -10,12 +10,7 @@ pub enum Ecosystem {
     Npm,
     Pnpm,
     Yarn,
-    /// PyPI (Python Package Index). Type placeholder — no adapter or
-    /// signal provider ships against it yet (ROADMAP M8). Reserved
-    /// here so policy authors can serialise/deserialise PyPI
-    /// `ResolvedDependency` shapes today, and so downstream `match`
-    /// arms over `Ecosystem` are forced to handle PyPI before the
-    /// adapter lands.
+    /// PyPI (Python Package Index).
     Pypi,
 }
 
@@ -45,8 +40,7 @@ impl Ecosystem {
 #[serde(rename_all = "lowercase")]
 pub enum RegistryFamily {
     Npm,
-    /// Reserved for the PyPI adapter (ROADMAP M8). Parses in policy
-    /// matchers today; no adapter ships against it yet.
+    /// PyPI registry family.
     Pypi,
 }
 
@@ -83,8 +77,7 @@ impl std::str::FromStr for RegistryFamily {
 ///   single-ecosystem projects.
 /// * Prefixed `npm:lodash` — matches only deps in the `npm` family
 ///   (i.e. resolved by `npm`, `pnpm`, or `yarn`).
-/// * Prefixed `pypi:requests` — matches only PyPI deps. Parses today;
-///   takes effect when the PyPI adapter ships (ROADMAP M8).
+/// * Prefixed `pypi:requests` — matches only PyPI deps.
 ///
 /// Scoped npm names (`@scope/name`, `npm:@scope/name`) are accepted
 /// in both forms.
@@ -244,10 +237,8 @@ pub enum Source {
     },
     Workspace,
     /// PyPI artifact — sdist (`.tar.gz`) or wheel (`.whl`) hosted on
-    /// `files.pythonhosted.org` (or a configured index mirror). Type
-    /// placeholder for the upcoming PyPI adapter (ROADMAP M8); not
-    /// emitted by any adapter today. Treated as non-exotic alongside
-    /// `Registry`.
+    /// `files.pythonhosted.org` (or a configured index mirror).
+    /// Treated as non-exotic alongside `Registry`.
     Pypi {
         url: String,
     },

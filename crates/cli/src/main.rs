@@ -226,9 +226,10 @@ struct EvalArgs {
 
     /// Disable the PyPI sdist scanner for this run. The sdist
     /// scanner downloads each PyPI release's source tarball
-    /// (subject to a 25 MiB cap) and inspects `setup.py` for
-    /// install-time RCE patterns. Disable it when bandwidth or
-    /// runtime matters more than `lifecycle_scripts` /
+    /// (subject to a 25 MiB cap) and inspects legacy `setup.py`
+    /// plus in-tree PEP 517 build backends declared through
+    /// `pyproject.toml` `backend-path`. Disable it when bandwidth
+    /// or runtime matters more than `lifecycle_scripts` /
     /// `suspicious_script` coverage on PyPI deps.
     #[arg(long)]
     no_pypi_sdist: bool,

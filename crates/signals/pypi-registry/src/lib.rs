@@ -41,11 +41,10 @@
 //!   attestations are present. [`Signal::PublisherChange`] and
 //!   [`Signal::MaintainerNewAccount`] cannot be derived
 //!   reliably yet.
-//! * `Signal::LifecycleScripts` / `Signal::SuspiciousScript` — Python
-//!   sdists execute `setup.py` at install time, but inspecting the
-//!   tarball requires a download + extract, which is a different
-//!   shape from the metadata-only providers shipping today. Tracked
-//!   separately as the "sdist scan" slice.
+//! * `Signal::LifecycleScripts` / `Signal::SuspiciousScript` — the
+//!   metadata-only provider does not inspect source archives. That
+//!   work lives in the separate "sdist scan" provider, which covers
+//!   legacy `setup.py` plus in-tree PEP 517 `backend-path` backends.
 
 use std::time::Duration;
 

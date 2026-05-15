@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "PyPI sdist scanner for InstallGuard: detects setup.py and scans it for high-risk install-time patterns."
+description = "PyPI sdist scanner for InstallGuard: detects setup.py and in-tree PEP 517 build backends, and scans them for high-risk install-time patterns."
 
 [lints]
 workspace = true
@@ -22,3 +22,4 @@ hex = { workspace = true }
 flate2 = "1.0"
 tar = "0.4"
 regex = { workspace = true }
+toml = { workspace = true }

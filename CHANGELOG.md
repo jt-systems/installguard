@@ -11,6 +11,33 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-05-15
+
+### Fixed
+
+* **PyPI source builds no longer go silent on in-tree PEP 517 backends.**
+  The `pypi-sdist` provider used to stop at `setup.py`: if a source
+  release was modern PEP 517-only (`pyproject.toml`, no `setup.py`),
+  InstallGuard emitted no install-time signal at all and the module
+  comments misleadingly implied that meant "no install-time Python".
+  The provider now reads `pyproject.toml`, detects
+  `[build-system].backend-path`, treats that as install-time code,
+  and scans every Python file under those backend roots with the same
+  shell + Python suspicious-pattern rules already used for
+  `setup.py`. Packages that ship an in-tree build backend now emit
+  `lifecycle_scripts: ["pyproject build-backend"]`, plus any
+  `suspicious_script` findings tied to the backend file path.
+
+### Documentation
+
+* **PyPI install-time coverage docs now match the runtime behaviour.**
+  Updated the README, roadmap, CLI help text, and docs-site coverage
+  matrix / changelog so they describe the current scope precisely:
+  InstallGuard scans legacy `setup.py` and in-tree PEP 517
+  `backend-path` backends inside canonical `.tar.gz` sdists, while
+  external build backends referenced only via `build-system.requires`
+  remain out of scope for this provider.
+
 ## [0.3.2] — 2026-05-15
 
 ### Fixed
