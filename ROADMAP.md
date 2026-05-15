@@ -145,7 +145,12 @@ For organisations that want central management.
 
 Apply the model to other ecosystems.
 
-- ☐ PyPI adapter + signal provider (`requirements.txt`, `poetry.lock`, `uv.lock`)
+- ☑ PyPI adapter (`uv.lock`, hashed `requirements.txt`) — 0.2.0
+- ☑ PyPI signal providers (PyPI JSON API, OSV PyPI, deps.dev pypi) — 0.2.1
+- ☐ PyPI maintainer / publisher signals (PEP 740 attestations as they roll out)
+- ☐ OpenSSF Scorecard wiring for PyPI
+- ☐ sdist `setup.py` static analysis
+- ☐ `poetry.lock` adapter
 - ☐ crates.io adapter
 - ☐ Go modules adapter (`go.sum`)
 - ☐ RubyGems adapter (`Gemfile.lock`)
