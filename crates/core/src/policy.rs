@@ -853,6 +853,7 @@ fn source_kind(s: &crate::dependency::Source) -> &'static str {
         Source::File { .. } => "file",
         Source::GithubShortcut { .. } => "github_shortcut",
         Source::Workspace => "workspace",
+        Source::Pypi { .. } => "pypi",
     }
 }
 

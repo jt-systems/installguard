@@ -10,6 +10,13 @@ pub enum Ecosystem {
     Npm,
     Pnpm,
     Yarn,
+    /// PyPI (Python Package Index). Type placeholder — no adapter or
+    /// signal provider ships against it yet (ROADMAP M8). Reserved
+    /// here so policy authors can serialise/deserialise PyPI
+    /// `ResolvedDependency` shapes today, and so downstream `match`
+    /// arms over `Ecosystem` are forced to handle PyPI before the
+    /// adapter lands.
+    Pypi,
 }
 
 impl Ecosystem {
@@ -20,6 +27,7 @@ impl Ecosystem {
     pub fn registry_family(self) -> RegistryFamily {
         match self {
             Self::Npm | Self::Pnpm | Self::Yarn => RegistryFamily::Npm,
+            Self::Pypi => RegistryFamily::Pypi,
         }
     }
 }
@@ -212,8 +220,9 @@ impl Integrity {
     }
 }
 
-/// Where the dependency was acquired from. Anything other than `Registry` is
-/// considered "exotic" and can be blocked by policy.
+/// Where the dependency was acquired from. Anything other than `Registry`
+/// or `Pypi` (both first-party registry sources) is considered "exotic"
+/// and can be blocked by policy.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Source {
@@ -234,12 +243,23 @@ pub enum Source {
         spec: String,
     },
     Workspace,
+    /// PyPI artifact — sdist (`.tar.gz`) or wheel (`.whl`) hosted on
+    /// `files.pythonhosted.org` (or a configured index mirror). Type
+    /// placeholder for the upcoming PyPI adapter (ROADMAP M8); not
+    /// emitted by any adapter today. Treated as non-exotic alongside
+    /// `Registry`.
+    Pypi {
+        url: String,
+    },
 }
 
 impl Source {
     #[must_use]
     pub fn is_exotic(&self) -> bool {
-        !matches!(self, Self::Registry { .. } | Self::Workspace)
+        !matches!(
+            self,
+            Self::Registry { .. } | Self::Workspace | Self::Pypi { .. }
+        )
     }
 }
 
@@ -355,5 +375,52 @@ mod tests {
             requested_by: vec![],
         };
         assert_eq!(dep.key(), "npm/lodash@1.0.0");
+    }
+
+    #[test]
+    fn pypi_ecosystem_maps_to_pypi_family() {
+        assert_eq!(Ecosystem::Pypi.registry_family(), RegistryFamily::Pypi);
+    }
+
+    #[test]
+    fn pypi_dep_key_uses_pypi_prefix() {
+        let dep = ResolvedDependency {
+            ecosystem: Ecosystem::Pypi,
+            name: "requests".into(),
+            version: "2.31.0".into(),
+            integrity: None,
+            source: Source::Pypi {
+                url: "https://files.pythonhosted.org/packages/abc/requests-2.31.0.tar.gz".into(),
+            },
+            direct: true,
+            requested_by: vec![],
+        };
+        assert_eq!(dep.key(), "pypi/requests@2.31.0");
+    }
+
+    #[test]
+    fn pypi_source_is_not_exotic() {
+        let s = Source::Pypi {
+            url: "https://files.pythonhosted.org/x".into(),
+        };
+        assert!(!s.is_exotic());
+    }
+
+    #[test]
+    fn pypi_ecosystem_round_trips_through_serde() {
+        let json = serde_json::to_string(&Ecosystem::Pypi).unwrap();
+        assert_eq!(json, "\"pypi\"");
+        let back: Ecosystem = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, Ecosystem::Pypi);
+    }
+
+    #[test]
+    fn pypi_source_round_trips_through_serde() {
+        let s = Source::Pypi {
+            url: "https://files.pythonhosted.org/packages/x/foo-1.0-py3-none-any.whl".into(),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Source = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
     }
 }

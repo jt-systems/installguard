@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use installguard_core::dependency::{Ecosystem, ResolvedDependency};
+use installguard_core::dependency::ResolvedDependency;
 use installguard_core::signal::{Signal, SignalError, SignalProvider};
 use serde::{Deserialize, Serialize};
 
@@ -202,9 +202,7 @@ fn all_unavailable(signals: &[Signal]) -> bool {
 }
 
 fn cache_key(provider: &str, dep: &ResolvedDependency) -> String {
-    let registry = match dep.ecosystem {
-        Ecosystem::Npm | Ecosystem::Pnpm | Ecosystem::Yarn => "npm",
-    };
+    let registry = dep.ecosystem.registry_family().as_str();
     // `\x1f` (unit separator) keeps the components unambiguously delimited
     // even if a package name contains `/` or `@`.
     format!(

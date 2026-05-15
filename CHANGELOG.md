@@ -11,6 +11,32 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.1.16] — 2026-05-15
+
+Type-system placeholders for PyPI: `Ecosystem::Pypi` and
+`Source::Pypi { url }` now ship in the core crate. Neither variant
+is emitted by any adapter today (the PyPI adapter lands in a
+later slice — see ROADMAP M8); they exist so downstream `match`
+arms over `Ecosystem` and `Source` are forced to handle PyPI
+*before* the adapter starts producing them, eliminating a class
+of "we shipped PyPI but `cargo build` started failing in third
+crate X" cliff edges.
+
+* `Source::Pypi` is treated as non-exotic alongside
+  `Source::Registry` and `Source::Workspace` (PyPI is a
+  first-party registry source).
+* `ResolvedDependency::key()` for a PyPI dep now produces the
+  expected `pypi/<name>@<version>` form.
+* The OSV provider deliberately skips PyPI deps for now
+  (returns `None` from `ecosystem_label`); the `"PyPI"` label
+  will be wired in alongside the PyPI signal slice.
+* The cache key generator no longer hardcodes `"npm"` — it
+  derives the registry namespace from
+  `Ecosystem::registry_family().as_str()`, picking up `pypi`
+  for free.
+
+No user-facing CLI behaviour changes in this release.
+
 ## [0.1.15] — 2026-05-15
 
 Policy allowlists now accept an optional `family:` ecosystem

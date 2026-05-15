@@ -281,6 +281,7 @@ fn source_kind(s: &Source) -> &'static str {
         Source::Tarball { .. } => "tarball",
         Source::File { .. } => "file",
         Source::Workspace => "workspace",
+        Source::Pypi { .. } => "pypi",
     }
 }
 

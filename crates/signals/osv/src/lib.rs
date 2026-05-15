@@ -150,6 +150,10 @@ impl SignalProvider for OsvProvider {
 fn ecosystem_label(eco: Ecosystem) -> Option<&'static str> {
     match eco {
         Ecosystem::Npm | Ecosystem::Pnpm | Ecosystem::Yarn => Some("npm"),
+        // PyPI ecosystem is a type placeholder until ROADMAP M8 —
+        // the OSV provider deliberately skips it (returns `None`)
+        // until the PyPI signal slice wires up the `"PyPI"` label.
+        Ecosystem::Pypi => None,
     }
 }
 
