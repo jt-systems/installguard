@@ -11,6 +11,57 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.2.5] — 2026-05-15
+
+**PyPI sdists are now scanned for install-time RCE patterns.**
+A new provider crate (`installguard-signal-pypi-sdist`) closes
+the last two cells in the PyPI coverage matrix that had a viable
+path: `lifecycle_scripts` and `suspicious_script`.
+
+For every resolved PyPI dependency the provider:
+
+* downloads the canonical `.tar.gz` sdist from PyPI (subject to
+  a 25 MiB hard cap; oversized releases are skipped with a
+  `pypi-sdist unavailable` reason rather than scanned);
+* HEAD-probes the file first so a pathological size never costs
+  bandwidth;
+* verifies the tarball's SHA-256 against the digest PyPI
+  publishes for that file, when available — a mismatch logs a
+  `tracing::warn` and emits no signal (registry-integrity is
+  separately handled by lockfile-hash verification);
+* extracts `setup.py` (1 MiB cap on the body, UTF-8 lossy
+  fallback so a non-UTF-8 byte sequence still gets scanned)
+  and emits `Signal::LifecycleScripts { scripts: ["setup.py"] }`
+  whenever the file is present — `setup.py` runs during
+  `pip install`, full stop;
+* runs the body through both the existing shell-pattern
+  detector (`curl … | sh`, `wget … | bash`, `/dev/tcp`,
+  base64-decoded shell, …) and a new Python-aware ruleset
+  covering `os.system`/`subprocess` calls that fetch over the
+  network, `exec`/`eval` of `urlopen`/`requests.get`/
+  `b64decode` payloads, the canonical `socket.socket(…) +
+  os.dup2 / pty.spawn / sh -i` reverse-shell layout, and
+  `__import__('os').system(…)` obfuscation. Each rule fires at
+  most once per body and emits `Signal::SuspiciousScript`.
+
+The provider fails soft on every kind of network or parse
+error: anything other than "the file was scanned and we found
+findings" produces zero signals (or a single
+`Signal::Unavailable` when the failure is informative).
+PEP 517-only sdists (no `setup.py`, just a `pyproject.toml`)
+correctly produce no lifecycle signal — that is the safe shape
+and we want users moving toward it.
+
+A new `--no-pypi-sdist` flag matches the existing
+`--no-pypi-registry` / `--no-osv` / `--no-deps-dev` /
+`--no-scorecard` opt-out family for offline / air-gapped CI
+runs or bandwidth-constrained environments.
+
+Smoke-validated against `pyyaml@6.0.1` (classic `setup.py`
+sdist): `lifecycle_scripts: ["setup.py"]` is emitted, the
+default policy blocks the install, and `--no-pypi-sdist`
+correctly suppresses the signal.
+
 ## [0.2.4] — 2026-05-15
 
 **PEP 740 publisher attestations are now surfaced as

@@ -30,6 +30,7 @@ installguard-signal-osv = { workspace = true }
 installguard-signal-depsdev = { workspace = true }
 installguard-signal-scorecard = { workspace = true }
 installguard-signal-pypi-registry = { workspace = true }
+installguard-signal-pypi-sdist = { workspace = true }
 installguard-cache = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }

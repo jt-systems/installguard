@@ -1,0 +1,24 @@
+[package]
+name = "installguard-signal-pypi-sdist"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "PyPI sdist scanner for InstallGuard: detects setup.py and scans it for high-risk install-time patterns."
+
+[lints]
+workspace = true
+
+[dependencies]
+installguard-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+flate2 = "1.0"
+tar = "0.4"
+regex = { workspace = true }

@@ -31,6 +31,7 @@ use installguard_signal_depsdev::DepsDevProvider;
 use installguard_signal_npm_registry::NpmRegistryProvider;
 use installguard_signal_osv::OsvProvider;
 use installguard_signal_pypi_registry::PypiRegistryProvider;
+use installguard_signal_pypi_sdist::PypiSdistProvider;
 use installguard_signal_scorecard::ScorecardProvider;
 
 mod progress;
@@ -222,6 +223,15 @@ struct EvalArgs {
     /// Useful for fully offline / air-gapped CI runs.
     #[arg(long)]
     no_pypi_registry: bool,
+
+    /// Disable the PyPI sdist scanner for this run. The sdist
+    /// scanner downloads each PyPI release's source tarball
+    /// (subject to a 25 MiB cap) and inspects `setup.py` for
+    /// install-time RCE patterns. Disable it when bandwidth or
+    /// runtime matters more than `lifecycle_scripts` /
+    /// `suspicious_script` coverage on PyPI deps.
+    #[arg(long)]
+    no_pypi_sdist: bool,
 
     /// Treat lifecycle scripts as ignored (matches `npm install
     /// --ignore-scripts`). Lifecycle script reasons are reported as
@@ -835,6 +845,11 @@ fn build_provider(args: &EvalArgs) -> Result<Box<dyn SignalProvider>> {
     if !args.no_pypi_registry {
         children.push(Box::new(
             PypiRegistryProvider::new().context("building pypi-registry http client")?,
+        ));
+    }
+    if !args.no_pypi_sdist {
+        children.push(Box::new(
+            PypiSdistProvider::new().context("building pypi-sdist http client")?,
         ));
     }
     if !args.no_osv {
