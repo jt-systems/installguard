@@ -82,14 +82,10 @@ impl SignalProvider for OsvProvider {
     }
 
     fn supports(&self, dep: &ResolvedDependency) -> bool {
-        // OSV speaks for many ecosystems; only the npm family is
-        // wired here because that's what the rest of the codebase
-        // resolves today. Adding PyPI / crates.io is one match arm
-        // each in [`ecosystem_label`].
-        matches!(
-            dep.ecosystem,
-            Ecosystem::Npm | Ecosystem::Pnpm | Ecosystem::Yarn
-        )
+        // OSV supports many ecosystems via [`ecosystem_label`].
+        // Returning a label here means we'll query and emit
+        // advisory signals for that ecosystem.
+        ecosystem_label(dep.ecosystem).is_some()
     }
 
     async fn signals(&self, dep: &ResolvedDependency) -> Result<Vec<Signal>, SignalError> {
@@ -150,10 +146,9 @@ impl SignalProvider for OsvProvider {
 fn ecosystem_label(eco: Ecosystem) -> Option<&'static str> {
     match eco {
         Ecosystem::Npm | Ecosystem::Pnpm | Ecosystem::Yarn => Some("npm"),
-        // PyPI ecosystem is a type placeholder until ROADMAP M8 —
-        // the OSV provider deliberately skips it (returns `None`)
-        // until the PyPI signal slice wires up the `"PyPI"` label.
-        Ecosystem::Pypi => None,
+        // PyPI advisories use the case-sensitive label `"PyPI"` per
+        // the OSV ecosystem registry.
+        Ecosystem::Pypi => Some("PyPI"),
     }
 }
 

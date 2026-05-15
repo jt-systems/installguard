@@ -11,6 +11,45 @@ minor bumps; breaking changes are called out under a **Breaking** subsection.
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-05-15
+
+**PyPI dependencies are now scored and gated.** The 0.2.0 adapter
+made PyPI deps visible; this release wires three signal providers
+to them so they actually participate in policy decisions.
+
+* New crate `installguard-signal-pypi-registry` calling the PyPI
+  JSON API (`https://pypi.org/pypi/<name>/<version>/json`) and
+  emitting:
+  * `published_at` — earliest `upload_time_iso_8601` across the
+    sdist + wheel files for the resolved version. Drives
+    `min-release-age` gating for PyPI deps.
+  * `deprecated_version` — when `info.yanked == true`
+    ([PEP 592](https://peps.python.org/pep-0592/)). The
+    maintainer's `yanked_reason` becomes the deprecation message.
+* OSV advisory provider now speaks PyPI: `Ecosystem::Pypi` maps
+  to the OSV `"PyPI"` ecosystem label, so GHSA / PyPA advisories
+  land on Python deps the same way they do on npm-family deps.
+  This is the headline value of the slice — `cryptography@<X`,
+  `requests@2.31.0`, `urllib3@<1.26.18` etc. now block / warn
+  per the same severity policy as their npm equivalents.
+* deps.dev provider: system selector parameterised; PyPI version
+  records now fetch from `/v3alpha/systems/pypi/...` and the
+  in-process cache is keyed by `(system, name@version)` so npm
+  and PyPI never alias.
+* New CLI flag `--no-pypi-registry` for fully offline / air-gapped
+  CI runs (mirrors `--no-osv` / `--no-deps-dev` / `--no-scorecard`).
+
+Out of scope for this slice (deferred):
+
+* Maintainer / publisher signals — PyPI's JSON API does not
+  expose per-version publisher identity, so `PublisherChange`
+  and `MaintainerNewAccount` are not derivable from this
+  endpoint.
+* OpenSSF Scorecard for PyPI deps — needs `info.project_urls`
+  plumbed into the Scorecard provider; tracked as a follow-up.
+* `setup.py` static analysis for sdists — requires download +
+  extract, a different provider shape; tracked separately.
+
 ## [0.2.0] — 2026-05-15
 
 **First non-npm ecosystem.** PyPI lockfiles now parse, evaluate, and

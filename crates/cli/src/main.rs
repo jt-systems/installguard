@@ -30,6 +30,7 @@ use installguard_core::CompositeProvider;
 use installguard_signal_depsdev::DepsDevProvider;
 use installguard_signal_npm_registry::NpmRegistryProvider;
 use installguard_signal_osv::OsvProvider;
+use installguard_signal_pypi_registry::PypiRegistryProvider;
 use installguard_signal_scorecard::ScorecardProvider;
 
 mod progress;
@@ -216,6 +217,11 @@ struct EvalArgs {
     /// Disable the OpenSSF Scorecard provider for this run.
     #[arg(long)]
     no_scorecard: bool,
+
+    /// Disable the PyPI registry signal provider for this run.
+    /// Useful for fully offline / air-gapped CI runs.
+    #[arg(long)]
+    no_pypi_registry: bool,
 
     /// Treat lifecycle scripts as ignored (matches `npm install
     /// --ignore-scripts`). Lifecycle script reasons are reported as
@@ -825,6 +831,11 @@ fn build_provider(args: &EvalArgs) -> Result<Box<dyn SignalProvider>> {
     children.push(Box::new(
         NpmRegistryProvider::new().context("building npm-registry http client")?,
     ));
+    if !args.no_pypi_registry {
+        children.push(Box::new(
+            PypiRegistryProvider::new().context("building pypi-registry http client")?,
+        ));
+    }
     if !args.no_osv {
         children.push(Box::new(
             OsvProvider::new().context("building OSV http client")?,

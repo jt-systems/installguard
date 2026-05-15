@@ -67,16 +67,24 @@ impl DepsDevProvider {
         })
     }
 
-    async fn fetch_version(&self, name: &str, version: &str) -> Option<VersionRecord> {
-        let key = format!("{name}@{version}");
+    async fn fetch_version(
+        &self,
+        system: &str,
+        name: &str,
+        version: &str,
+    ) -> Option<VersionRecord> {
+        // Cache key includes the system so npm:foo@1 and pypi:foo@1
+        // never alias.
+        let key = format!("{system}/{name}@{version}");
         if let Ok(cache) = self.cache.lock() {
             if let Some(hit) = cache.get(&key) {
                 return hit.clone();
             }
         }
         let url = format!(
-            "{}/systems/npm/packages/{}/versions/{}",
+            "{}/systems/{}/packages/{}/versions/{}",
             self.base,
+            system,
             urlencoding(name),
             urlencoding(version)
         );
@@ -109,14 +117,14 @@ impl SignalProvider for DepsDevProvider {
     }
 
     fn supports(&self, dep: &ResolvedDependency) -> bool {
-        matches!(
-            dep.ecosystem,
-            Ecosystem::Npm | Ecosystem::Pnpm | Ecosystem::Yarn
-        )
+        depsdev_system(dep.ecosystem).is_some()
     }
 
     async fn signals(&self, dep: &ResolvedDependency) -> Result<Vec<Signal>, SignalError> {
-        let Some(record) = self.fetch_version(&dep.name, &dep.version).await else {
+        let Some(system) = depsdev_system(dep.ecosystem) else {
+            return Ok(Vec::new());
+        };
+        let Some(record) = self.fetch_version(system, &dep.name, &dep.version).await else {
             // Catalogue silence is not an error \u2014 the package may
             // simply not be indexed yet. Emit nothing so policy
             // doesn't fire on absence; absence-as-suspicious is
@@ -139,7 +147,16 @@ pub fn compute_project_metadata(record: &VersionRecord) -> Signal {
         source: SOURCE.to_string(),
     }
 }
-
+/// Maps an internal [`Ecosystem`] to the deps.dev system path
+/// component. Returns `None` for ecosystems deps.dev does not
+/// index, so the caller can short-circuit.
+#[must_use]
+pub fn depsdev_system(eco: Ecosystem) -> Option<&'static str> {
+    match eco {
+        Ecosystem::Npm | Ecosystem::Pnpm | Ecosystem::Yarn => Some("npm"),
+        Ecosystem::Pypi => Some("pypi"),
+    }
+}
 #[derive(Debug, Clone, Deserialize)]
 pub struct VersionRecord {
     #[serde(default)]

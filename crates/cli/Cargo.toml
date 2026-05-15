@@ -10,7 +10,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
-description = "Policy gate for npm/pnpm/yarn installs: blocks risky dependencies (advisories, low scorecard, brand-new releases, suspicious lifecycle scripts) from CI and dev machines."
+description = "Policy gate for npm/pnpm/yarn/PyPI installs: blocks risky dependencies (advisories, low scorecard, brand-new releases, suspicious lifecycle scripts) from CI and dev machines."
 
 [lints]
 workspace = true
@@ -29,6 +29,7 @@ installguard-signal-npm-registry = { workspace = true }
 installguard-signal-osv = { workspace = true }
 installguard-signal-depsdev = { workspace = true }
 installguard-signal-scorecard = { workspace = true }
+installguard-signal-pypi-registry = { workspace = true }
 installguard-cache = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
